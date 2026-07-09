@@ -23,3 +23,12 @@ go.work.sum
 
 # env file
 .env
+
+# Real per-host config (contains the agentKey secret). Use config.example.toml as template.
+config.toml
+
+# Local agent artifacts
+hygeia-buffer.jsonl
+hygeia
+hygeia.exe
+hygeia-*

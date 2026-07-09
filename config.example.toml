@@ -1,0 +1,10 @@
+# Ejemplo de configuración del agente Hygeia.
+# Copia este fichero a "config.toml" y rellena serverUrl y agentKey.
+# Cualquier campo puede sobreescribirse con variables de entorno:
+#   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH
+
+serverUrl   = "https://ellysia.tu-dominio/hygeia"
+agentKey    = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
+intervalSec = 15
+bufferPath  = "hygeia-buffer.jsonl"
+collectors  = ["cpu", "memory", "disk", "network", "processes"]

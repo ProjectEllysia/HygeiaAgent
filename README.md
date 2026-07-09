@@ -12,6 +12,31 @@
 
 ---
 
+## 0. Arranque rápido (repo)
+
+Este repo contiene el **esqueleto Go compilable** de la Fase 1 (scaffolding con
+`TODO`s). Sin dependencias externas todavía: compila con la stdlib.
+
+```
+main.go  version.go  config.example.toml  go.mod
+payload/  config/  collector/  buffer/  shipper/   docs/GUIA-GO.md
+```
+
+1. Instala Go (ver `docs/GUIA-GO.md` §2).
+2. `cp config.example.toml config.toml` y rellena `serverUrl` + `agentKey`
+   (o usa `HYGEIA_SERVER_URL` / `HYGEIA_AGENT_KEY`).
+3. `go run .`
+4. Rellena los `TODO` (gopsutil, TOML, shipper, buffer) siguiendo
+   `docs/GUIA-GO.md` §7.
+
+> **Guía didáctica de Go** (instalación, programación y compilación desde cero):
+> [`docs/GUIA-GO.md`](docs/GUIA-GO.md).
+>
+> El diseño (filosofía, métricas, fases, contrato de ingesta) sigue abajo; este
+> README sigue siendo el **documento de diseño** del repositorio.
+
+---
+
 ## 1. Filosofía: el agente es tonto a propósito
 
 La **autoridad de detección vive en el backend**, no aquí. Así se cambian umbrales y reglas
