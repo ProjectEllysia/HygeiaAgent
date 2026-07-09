@@ -1,66 +1,84 @@
-# Guía de Go para Hygeia — instalación, programación y compilación
+# Guía de Go — instalación, programación y compilación
 
-> Guía pensada para alguien que **no ha programado nunca en Go**. Parte de cero
-> y llega hasta compilar y cruzar-compilar el agente Hygeia. Si ya sabes Go,
-> salta directamente a §7 (implementar los TODO) y §8 (compilación).
-
-El repositorio ya contiene el **esqueleto compilable** del agente. Esta guía te
-enseña a instalar Go, a entender cada archivo del esqueleto y a rellenar los
-`TODO` para tener el agente real.
+> Guía pensada para alguien que **no ha programado nunca en Go**. Cubre la
+> instalación, la sintaxis completa del lenguaje, la stdlib esencial, concurrencia,
+> testing, módulos y compilación. Es autocontenida: no depende de ningún proyecto
+> concreto. Si ya sabes programar en otro lenguaje, léela en orden. Si vienes de
+> cero absoluto, ve directo al §3 (hola mundo) y vuelve al §2 cuando quieras
+> entender los fundamentos.
 
 ---
 
 ## Índice
 
-1. [Qué es Go y por qué para Hygeia](#1-qué-es-go-y-por-qué-para-hygeia)
+1. [Qué es Go](#1-qué-es-go)
 2. [Instalación](#2-instalación)
-3. [Hola mundo y `go run`](#3-hola-mundo-y-go-run)
-4. [Conceptos esenciales de Go](#4-conceptos-esenciales-de-go)
-5. [Módulos y dependencias](#5-módulos-y-dependencias)
-6. [Estructura del proyecto Hygeia (cómo leer el esqueleto)](#6-estructura-del-proyecto-hygeia-cómo-leer-el-esqueleto)
-7. [Implementar los TODO (gopsutil, TOML, shipper, buffer)](#7-implementar-los-todo-gopsutil-toml-shipper-buffer)
-8. [Compilación y cross-compilación](#8-compilación-y-cross-compilación)
-9. [Testing y calidad](#9-testing-y-calidad)
-10. [Empaquetado como servicio](#10-empaquetado-como-servicio)
-11. [Flujo de trabajo diario](#11-flujo-de-trabajo-diario)
-12. [Recursos oficiales](#12-recursos-oficiales)
+3. [Hola mundo y primeras herramientas](#3-hola-mundo-y-primeras-herramientas)
+4. [Fundamentos del lenguaje](#4-fundamentos-del-lenguaje)
+5. [Estructuras de datos](#5-estructuras-de-datos)
+6. [Métodos e interfaces](#6-métodos-e-interfaces)
+7. [Manejo de errores](#7-manejo-de-errores)
+8. [Concurrencia](#8-concurrencia)
+9. [Tour por la biblioteca estándar](#9-tour-por-la-biblioteca-estándar)
+10. [Módulos y dependencias](#10-módulos-y-dependencias)
+11. [Testing](#11-testing)
+12. [Compilación y cross-compilación](#12-compilación-y-cross-compilación)
+13. [Herramientas y buenas prácticas](#13-herramientas-y-buenas-prácticas)
+14. [Organización de proyectos Go](#14-organización-de-proyectos-go)
+15. [Recursos oficiales](#15-recursos-oficiales)
 
 ---
 
-## 1. Qué es Go y por qué para Hygeia
+## 1. Qué es Go
 
-Go (o *Golang*) es un lenguaje compilado, con tipado estático, creado por Google
-en 2009. Sus rasgos clave para un agente de monitorización como Hygeia:
+Go (también llamado *Golang*) es un lenguaje **compilado**, con **tipado
+estático**, creado por Google en 2009. Fue diseñado por Robert Griesemer, Rob
+Pike y Ken Thompson con tres objetivos: simplicidad, velocidad de compilación
+y concurrencia tratable.
 
-- **Un solo binario estático.** Compilas y obtienes un `.exe` (Windows) o un
-  ejecutable (Linux/macOS) que **no necesita runtime ni dependencias
-  instaladas** en el host. Lo copias y arranca. Esto es lo que gana a Python
-  para distribución (ver README §2).
-- **Cross-compilación nativa.** Desde tu Windows puedes compilar para Linux
-  ARM64 cambiando dos variables de entorno. Sin toolchains extra.
-- **Goroutines.** Concurrencia barata: lanzar miles de "hilos ligeros" cuesta
-  KB de RAM. Ideal para correr varios colectores a la vez (README §4).
-- **Stdlib potente.** `net/http`, `encoding/json`, `compress/gzip`,
-  `log/slog`, `context`, `os/signal`… el núcleo del agente se hace casi sin
-  librerías externas.
-- **`gopsutil`** da CPU/memoria/disco/red/procesos multiplataforma de fábrica.
+### Rasgos distintivos
 
-Go **no** usa clases ni herencia. Usa `struct` + `interface` + composición. No
-hay `try/catch`: los errores son valores que devuelves y compruebas. Es un
-lenguaje pequeño: la especificación cabe en ~50 páginas, y se aprende en días.
+- **Un solo binario estático.** Compilas y obtienes un ejecutable que no necesita
+  runtime ni bibliotecas externas instaladas en el sistema destino. Lo copias y
+  funciona.
+- **Compilación rapidísima.** Proyectos grandes compilan en segundos, no en
+  minutos. El compilador hace linking estático por defecto.
+- **Cross-compilación nativa.** Desde cualquier SO produces binarios para
+  cualquier otro SO/arquitectura cambiando dos variables de entorno, sin
+  toolchains adicionales.
+- **Goroutines.** Concurrencia ligera: lanzas miles de tareas concurrentes que
+  ocupan ~2 KB de stack cada una (frente a ~1 MB de un hilo del SO). El runtime
+  multiplexa las goroutines sobre hilos del sistema automáticamente.
+- **Canales.** Comunicación tipada entre goroutines inspirada en CSP
+  (*Communicating Sequential Processes*). El mantra: *"no compartas memoria para
+  comunicarte; comunícate compartiendo memoria"*.
+- **Recolector de basura.** Liberación automática de memoria, con baja latencia.
+- **No hay clases ni herencia.** Usa `struct` + `interface` + composición.
+- **No hay excepciones.** Los errores son **valores** que devuelves y compruebas.
+  El flujo de error es explícito, no mágico.
+- **Lenguaje pequeño.** La especificación completa cabe en unas 50 páginas. La
+  sintaxis se aprende en un fin de semana.
+
+### Cuándo usar Go
+
+Aplicaciones de red, servidores HTTP, CLI, agentes, microservicios,
+infraestructura (Docker, Kubernetes, Terraform, Prometheus están escritos en Go),
+herramientas de desarrollo. **No** es la mejor opción para aplicaciones de
+escritorio con GUI, videojuegos 3D o sistemas embebidos muy limitados (aunque
+TinyGo cubre parte de esto).
 
 ---
 
 ## 2. Instalación
 
-### 2.1 Windows (este equipo)
+### 2.1 Windows
 
 **Opción A — instalador oficial (recomendada):**
 1. Ve a https://go.dev/dl/
 2. Descarga `go1.22.x.windows-amd64.msi` (o la versión más reciente).
 3. Ejecútalo. Por defecto instala en `C:\Program Files\Go` y **añade Go al PATH
    automáticamente**.
-4. Abre una terminal **nueva** (PowerShell) y verifica:
+4. Abre una terminal **nueva** (PowerShell o Símbolo del sistema) y verifica:
 
 ```powershell
 go version
@@ -77,61 +95,76 @@ winget install GoLang.Go
 scoop install go
 ```
 
-> Si `go` no se reconoce tras instalar, abre una terminal nueva. Si siguen sin
+> Si `go` no se reconoce tras instalar, abre una terminal nueva. Si sigue sin
 > reconocerse, añade `C:\Program Files\Go\bin` a la variable de entorno `PATH`.
 
 ### 2.2 Linux
 
 ```bash
-# Descarga (ejemplo amd64; cambia amd64 por arm64 si tu host es ARM)
+# Descarga (sustituye amd64 por arm64 si tu máquina es ARM)
 wget https://go.dev/dl/go1.22.x.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.22.x.linux-amd64.tar.gz
 
-# Añade al PATH (en ~/.bashrc o ~/.zshrc)
+# Añade al PATH (~/.bashrc o ~/.zshrc)
 export PATH=$PATH:/usr/local/go/bin
+
+# Aplica los cambios
+source ~/.bashrc
+go version
 ```
 
-Distros basadas en Debian/Ubuntu también: `sudo apt install golang-go` (suele
-quedar una versión antigua; preferible el tarball oficial).
+En Debian/Ubuntu también funciona `sudo apt install golang-go`, pero la versión
+de los repos suele estar varias releases por detrás. El tarball oficial es
+preferible.
 
 ### 2.3 macOS
 
 ```bash
 brew install go
+go version
 ```
 
-### 2.4 Variables de entorno importantes
-
-Comprueba con `go env`:
+### 2.4 Variables de entorno
 
 | Variable | Significado | Valor típico |
 |---|---|---|
-| `GOROOT` | Dónde está instalado Go | `C:\Program Files\Go` |
-| `GOPATH` | Tu espacio de trabajo (binarios instalados con `go install`) | `~/go` |
+| `GOROOT` | Dónde está instalado Go | `C:\Program Files\Go` o `/usr/local/go` |
+| `GOPATH` | Espacio de trabajo; binarios instalados con `go install` | `~/go` (por defecto) |
 | `GOMODCACHE` | Caché de módulos descargados | `~/go/pkg/mod` |
-| `GOOS` / `GOARCH` | Sistema/archivo objetivo (para cross-compile) | `windows`/`amd64` |
+| `GOOS` / `GOARCH` | SO y arquitectura destino (para cross-compile) | `linux`/`amd64` |
+| `GOPROXY` | Proxy de módulos | `https://proxy.golang.org,direct` |
+| `GOPRIVATE` | Módulos privados que no consultan el proxy | repos de tu organización |
+| `CGO_ENABLED` | Habilitar compilador de C (0 = binario puramente Go) | `1` (cambiar a `0` para estático) |
 
-> **No necesitas** tocar `GOPATH` ni crear `$GOPATH/src/...`. Ese flujo es de
-> 2014. Hoy se trabaja con **módulos** (§5) en cualquier carpeta.
+Consulta todas con:
+```powershell
+go env
+```
+
+> **No necesitas** crear `$GOPATH/src/...` para tus proyectos. Desde Go 1.11
+> (2018) se trabaja con **módulos** (§10) y puedes clonar tu proyecto en
+> cualquier carpeta del disco.
 
 ### 2.5 Editor
 
-- **VS Code** + la extensión oficial **"Go"** (de Google). Instala `gopls`
-  (servidor de lenguaje) automáticamente. Es lo recomendado y gratis.
-- **GoLand** (JetBrains, de pago): el IDE más potente para Go.
-- `gopls` es el "cerebro" que da autocompletado, ir-a-definición, diagnósticos.
-  La extensión de VS Code lo gestiona sola.
-
-Tras instalar la extensión, abre el repo `Ellysia-Hygeia` en VS Code. Te
-ofrecerá instalar herramientas adicionales (`gopls`, `dlv`, `staticcheck`):
-di que sí.
+- **VS Code** + extensión oficial **"Go"** (de Google, `golang.go`). Instala
+  `gopls` (el servidor de lenguaje) automáticamente. Es lo recomendado para
+  empezar y es gratis.
+- **GoLand** (JetBrains, de pago): IDE completo para Go.
+- `gopls` proporciona autocompletado, ir-a-definición, diagnósticos en vivo,
+  formateo al guardar y sugerencias de refactorización.
+- **Herramientas adicionales** que VS Code te ofrecerá instalar: `dlv`
+  (depurador), `staticcheck` (linter avanzado), `gotests` (generación de tests).
+  Acepta todas.
 
 ---
 
-## 3. Hola mundo y `go run`
+## 3. Hola mundo y primeras herramientas
 
-Crea en cualquier sitio una carpeta `hola/` con un `main.go`:
+### 3.1 Tu primer programa
+
+Crea una carpeta y un archivo `main.go`:
 
 ```go
 package main
@@ -139,868 +172,1644 @@ package main
 import "fmt"
 
 func main() {
-	fmt.Println("Hola desde Go")
+	fmt.Println("Hola, Go")
 }
 ```
 
 Inicializa un módulo y ejecuta:
 
 ```powershell
-cd hola
-go mod init ejemplo.com/hola
+go mod init hola
 go run .
 ```
 
-- `package main` + `func main()` = punto de entrada de un ejecutable.
-- `go run .` **compila en memoria y ejecuta** sin dejar binario. Útil en
-  desarrollo.
-- `go build .` **compila y deja un binario** (`hola.exe` en Windows,
-  `hola` en Linux/macOS) en la carpeta actual.
+- `package main` es el nombre del paquete raíz. Solo los paquetes `main`
+  producen un ejecutable.
+- `func main()` es el punto de entrada (sin argumentos ni retorno, a diferencia
+  de C).
+- `import "fmt"` trae el paquete `fmt` de la stdlib para imprimir. Go **exige**
+  que todo import se use y que no haya variables sin usar: si importas algo y no
+  lo usas, no compila.
+- `go run .` compila en memoria y ejecuta (sin dejar binario).
+- `go build` compila y deja un binario en la carpeta actual.
 
-> Go **exige** que todo import se use y que no haya variables sin usar. Si
-> importas `fmt` y no lo usas, no compila. Esto es intencional: código limpio.
+### 3.2 Los tres comandos que más vas a usar
+
+| Comando | Efecto |
+|---|---|
+| `go run .` | Compila y ejecuta (sin binario persistente). |
+| `go build .` | Compila y deja el binario en el directorio actual. |
+| `go build -o nombre.exe .` | Ídem, pero con nombre de salida explícito. |
+| `go fmt ./...` | Formatea todo el código del módulo. |
+| `go vet ./...` | Analiza el código en busca de errores comunes. |
+| `go test ./...` | Ejecuta todos los tests del módulo. |
+| `go mod tidy` | Añade/quita dependencias de `go.mod` y actualiza `go.sum`. |
+| `go get pkg@v1.2.3` | Añade/actualiza una dependencia. |
+
+El punto `.` significa "el paquete del directorio actual". `./...` significa
+"este paquete y todos sus subpaquetes".
 
 ---
 
-## 4. Conceptos esenciales de Go
-
-Lee esta sección con el esqueleto del repo abierto; verás cada concepto
-aplicado.
+## 4. Fundamentos del lenguaje
 
 ### 4.1 Paquetes e imports
 
-Cada carpeta es un paquete. El nombre del paquete va en la primera línea no
-comentada de cada `.go`:
+En Go, **cada directorio es un paquete**. El nombre del paquete va en la primera
+línea de cada archivo `.go` dentro del directorio:
 
 ```go
-package collector
+package calculadora
 ```
 
-Para usar algo de otro paquete, lo importas por su **ruta de módulo**:
+Todos los archivos de un mismo directorio deben pertenecer al mismo paquete
+(con la excepción de `_test.go`, que pueden usar `package calculadora_test`).
+
+Para usar algo de otro paquete lo importas por su ruta de módulo:
 
 ```go
-import "github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+import (
+	"fmt"
+	"math"
+	"mimodulo.com/auth"
+)
 ```
 
-Y lo referencias como `payload.Payload`, `payload.Metrics`, etc. Lo que
-**empieza con mayúscula** se exporta (público); lo minúscula es privado del
-paquete. No hay `public`/`private` como en Java: es la inicial.
-
-### 4.2 Variables, tipos, constantes
+Lo que **empieza con mayúscula** se exporta (es público). Lo que empieza con
+**minúscula** es privado al paquete. No existen las palabras `public`,
+`private`, `protected`:
 
 ```go
-var x int        // cero-value = 0
-var s string     // cero-value = ""
-y := 42          // declaración corta con inferencia (solo dentro de funcs)
-const Pi = 3.14  // constante
+func Suma(a, b int) int { return a + b }   // exportada
+func resta(a, b int) int { return a - b }  // privada
 ```
 
-Tipos básicos: `int`, `int64`, `uint64`, `float64`, `string`, `bool`,
-`time.Duration`, `error`. Los enteros sin signo (`uint64`) se usan en Hygeia
-para bytes/tamaños (p. ej. `MemoryMetrics.TotalBytes`).
-
-`:=` es la forma idiomática; `var` se usa sobre todo en paquete (fuera de
-funcs) o cuando necesitas el cero-value explícito.
-
-### 4.3 Funciones y múltiples retornos
+### 4.2 Variables, constantes y tipos básicos
 
 ```go
-func add(a, b int) int { return a + b }
+// Declaración con var + tipo explícito
+var nombre string = "Go"
+var edad int          // cero-value = 0
+var activo bool       // cero-value = false
+var pi float64 = 3.14
 
+// Declaración corta con inferencia de tipo (solo dentro de funciones)
+saludo := "Hola"           // string
+contador := 0                // int
+precio := 9.99               // float64
+hecho := false               // bool
+
+// Bloque var
+var (
+	host = "localhost"
+	port = 8080
+)
+
+// Constantes (el tipo se infiere del contexto)
+const MaxRetries = 3
+const Version = "1.0.0"
+```
+
+**Tipos numéricos:**
+
+| Tipo | Rango |
+|---|---|
+| `int`, `uint` | 32 o 64 bits según arquitectura |
+| `int8`, `int16`, `int32`, `int64` | Enteros con signo |
+| `uint8` (`byte`), `uint16`, `uint32`, `uint64` | Enteros sin signo |
+| `float32`, `float64` | Coma flotante |
+| `complex64`, `complex128` | Números complejos |
+
+**En la práctica** casi siempre usarás `int` para enteros y `float64` para
+decimales. `uint64` es común para tamaños (bytes), offsets o contadores que
+nunca son negativos.
+
+**Cero-values:** toda variable declarada sin valor explícito recibe un **valor
+cero** del tipo: `0` para numéricos, `""` para strings, `false` para bool,
+`nil` para punteros, slices, maps, interfaces y funciones.
+
+### 4.3 Funciones
+
+```go
+// Básica
+func suma(a, b int) int {
+	return a + b
+}
+
+// Múltiples parámetros del mismo tipo (notación compacta)
+func multiplicar(a, b, c int) int {
+	return a * b * c
+}
+
+// Retorno múltiple
 func dividir(a, b int) (int, error) {
 	if b == 0 {
-		return 0, errors.New("división por cero")
+		return 0, fmt.Errorf("no se puede dividir por cero")
 	}
 	return a / b, nil
 }
+
+// Retornos con nombre (los inicializa al cero-value)
+func split(sum int) (x, y int) {
+	x = sum * 4 / 9
+	y = sum - x
+	return // "naked return": devuelve x e y
+}
+
+// Función variádica (número variable de argumentos)
+func sumar(nums ...int) int {
+	total := 0
+	for _, n := range nums {
+		total += n
+	}
+	return total
+}
+// Uso: sumar(1, 2, 3, 4)
+
+// Las funciones son valores de primera clase
+operacion := suma
+resultado := operacion(3, 4)
+
+// Closure
+func contador() func() int {
+	i := 0
+	return func() int {
+		i++
+		return i
+	}
+}
 ```
 
-Una función puede devolver **varios valores**. El patrón `(resultado, error)`
-es ubicuo: devuelves `nil` como error si todo fue bien.
+### 4.4 Control de flujo
 
-### 4.4 Errores: no hay excepciones
-
-Go no tiene `try/catch`. Un `error` es un valor más:
+**`if`:** no usa paréntesis, pero las llaves son obligatorias. Puede incluir una
+sentencia corta antes de la condición:
 
 ```go
-res, err := dividir(10, 0)
 if err != nil {
-	log.Error("no se pudo dividir", "err", err)
+	return err
+}
+
+// Declaración + condición en una línea (muy común)
+if x := calcular(); x < 0 {
+	fmt.Println("negativo")
+} else if x == 0 {
+	fmt.Println("cero")
+} else {
+	fmt.Println("positivo")
+}
+// x solo existe dentro del bloque if/else
+```
+
+**`for`:** es el **único** bucle del lenguaje. Sirve como `for`, `while` e
+infinito:
+
+```go
+// Estilo clásico
+for i := 0; i < 10; i++ {
+	fmt.Println(i)
+}
+
+// Estilo while
+suma := 0
+for suma < 100 {
+	suma += rand.Intn(20)
+}
+
+// Bucle infinito
+for {
+	// se sale con break, return, etc.
+}
+
+// Iterar con range (sobre slices, arrays, maps, strings, canales)
+nums := []int{2, 4, 6, 8}
+for i, v := range nums {
+	fmt.Printf("índice %d, valor %d\n", i, v)
+}
+```
+
+**`switch`:** no tiene *fall-through* implícito (no necesitas `break`). Puede
+evaluar condiciones, no solo valores:
+
+```go
+switch dia {
+case "lunes":
+	fmt.Println("inicio de semana")
+case "viernes":
+	fmt.Println("casi finde")
+default:
+	fmt.Println("día normal")
+}
+
+// Switch sin expresión = if/else encadenado más limpio
+switch {
+case hora < 12:
+	fmt.Println("buenos días")
+case hora < 18:
+	fmt.Println("buenas tardes")
+default:
+	fmt.Println("buenas noches")
+}
+```
+
+### 4.5 Punteros
+
+Go tiene punteros pero **no** aritmética de punteros (no puedes sumar/restar
+a una dirección). Son seguros por diseño.
+
+```go
+x := 42
+p := &x      // p es *int (puntero a int), contiene la dirección de x
+fmt.Println(*p) // 42: desreferenciar (leer el valor)
+*p = 21         // escribir a través del puntero
+fmt.Println(x)  // 21: x ha cambiado
+
+// Puntero a struct
+type Persona struct {
+	Nombre string
+}
+
+func renombrar(p *Persona, nombre string) {
+	p.Nombre = nombre // sintaxis abreviada: no necesitas (*p).Nombre
+}
+
+// new(T) devuelve *T apuntando a un cero-value
+ptr := new(int)    // *int, valor 0
+
+// nil = puntero que no apunta a nada
+var q *int
+fmt.Println(q == nil) // true
+```
+
+**Cuándo usar punteros:**
+- Para que una función **modifique** el valor del llamante.
+- Para evitar copias de structs grandes (aunque el compilador a veces optimiza).
+- Para distinguir entre "ausencia" y "valor cero" (un puntero puede ser `nil`; un
+  `int` siempre es al menos `0`).
+
+### 4.6 `defer`
+
+`defer` pospone la ejecución de una llamada hasta que la función retorna. Se usa
+para **limpiar recursos** (cerrar archivos, liberar locks, etc.):
+
+```go
+func leerArchivo(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close() // se ejecuta al salir de la función, pase lo que pase
+
+	return io.ReadAll(f)
+}
+```
+
+Los `defer` se ejecutan en orden **LIFO** (el último declarado es el primero en
+ejecutarse). Valores de parámetros se evalúan en el momento de la declaración,
+no de la ejecución.
+
+### 4.7 `panic` y `recover`
+
+`panic` detiene la ejecución normal y desenrolla la pila (ejecutando `defer`s)
+hasta que alguien hace `recover` o el programa termina. **No** es el mecanismo
+de error habitual de Go: se reserva para errores irrecuperables (bug del
+programador).
+
+```go
+func debeSerPositivo(n int) {
+	if n < 0 {
+		panic("n no puede ser negativo")
+	}
+}
+
+func seguro(f func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic recuperado: %v", r)
+		}
+	}()
+	f()
 	return
 }
-fmt.Println(res)
 ```
 
-La regla de oro: **después de cada llamada que pueda fallar, comprueba `err`**.
-El compilador NO te obliga, pero es la convención más fuerte del lenguaje.
-`errors.New("texto")` crea un error simple; `fmt.Errorf("...: %w", err)` envuelve
-uno existente (conserva la cadena para `errors.Is`/`errors.As`).
+Regla general: **no paniquees en bibliotecas**; devuelve `error`. Reserva
+`panic` para `main` o funciones `init` ante fallos de configuración que impiden
+arrancar.
 
-### 4.5 Structs y métodos
+### 4.8 Genéricos (Go 1.18+)
 
-Un `struct` agrupa campos. Un método es una función con un *receptor*:
+Desde Go 1.18, el lenguaje tiene **genéricos** (parámetros de tipo):
 
 ```go
-type CPUCollector struct{}
+// Función genérica: funciona con cualquier tipo ordenable
+func Min[T constraints.Ordered](a, b T) T {
+	if a < b {
+		return a
+	}
+	return b
+}
 
-func (c *CPUCollector) Name() string { return "cpu" }
-func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
-	// ...
+x := Min(3, 5)        // T = int
+y := Min(1.5, 2.3)    // T = float64
+
+// Struct genérico
+type Pila[T any] struct {
+	items []T
+}
+
+func (p *Pila[T]) Push(item T) {
+	p.items = append(p.items, item)
+}
+
+func (p *Pila[T]) Pop() (T, bool) {
+	if len(p.items) == 0 {
+		var zero T
+		return zero, false
+	}
+	item := p.items[len(p.items)-1]
+	p.items = p.items[:len(p.items)-1]
+	return item, true
 }
 ```
 
-`(c *CPUCollector)` es el receptor. `*` = puntero (puedes mutar el struct);
-sin `*` = copia. Para implementaciones sin estado como `CPUCollector{}` da
-igual, pero por convención se usa puntero.
-
-### 4.6 Interfaces (satisfacción implícita)
+`constraints.Ordered` y `constraints` se movieron a `golang.org/x/exp/constraints`
+en Go 1.22+. La restricción `any` es un alias de `interface{}`. Puedes definir
+tus propias restricciones con interfaces que contengan tipos:
 
 ```go
-type Collector interface {
-	Name() string
-	Collect(ctx context.Context, m *payload.Metrics) error
-}
-```
-
-**No declaras "implements"**. Si tu struct tiene los métodos con esa firma,
-*ya* implementa la interfaz. Así, `CPUCollector`, `MemoryCollector`, etc. son
-todos `Collector` sin decirlo en ningún sitio. Por eso el `Registry` guarda
-`func() Collector` y puede mezclarlos.
-
-> Esto es la **composición sobre la herencia**: cada colector es autónomo, y el
-> bucle principal solo conoce la interfaz `Collector`.
-
-### 4.7 Slices, maps y `range`
-
-```go
-names := []string{"cpu", "memory", "disk"}   // slice (lista dinámica)
-for i, n := range names {                     // i = índice, n = elemento
-	fmt.Println(i, n)
+type Numero interface {
+	int | int64 | float64
 }
 
-counters := map[string]int{"cpu": 1, "mem": 2}
-for k, v := range counters {
-	fmt.Println(k, v)
-}
+func Doble[T Numero](v T) T { return v * 2 }
 ```
 
-Los slices son la estructura de lista más común. `append(cs, x)` añade un
-elemento. En `collector/collector.go`, `Build` hace `cs = append(cs, f())`.
-
-### 4.8 Control de flujo
-
-- **`if`** no lleva paréntesis: `if err != nil { ... }`.
-- **`for`** es el único bucle: sirve como `while` y como `for` clásico.
-  ```go
-  for i := 0; i < 3; i++ { ... }   // clásico
-  for x < 100 { x++ }              // estilo while
-  for { ... }                      // infinito (se sale con break/return)
-  ```
-- **`switch`** sin `break` implícito necesario (Go ya no cae al siguiente caso
-  salvo que uses `fallthrough`).
-
-### 4.9 `defer`
-
-`defer` ejecuta una llamada al **final** de la función, útil para limpieza:
-
-```go
-cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-defer cancel()   // garantiza liberar el contexto al salir
-```
-
-`defer` es LIFO (último en registrarse, primero en ejecutarse). Lo verás en
-`main.go` (`defer stop()`, `defer ticker.Stop()`) y en cada goroutine del
-`collectPayload`.
-
-### 4.10 Goroutines, `sync.WaitGroup` y `context.Context`
-
-Una **goroutine** es un hilo ligero: `go func(){ ... }()`.
-
-```go
-var wg sync.WaitGroup
-for _, c := range cs {
-	wg.Add(1)
-	go func(c Collector) {
-		defer wg.Done()
-		// trabajo...
-	}(c)
-}
-wg.Wait()   // bloquea hasta que todos terminan
-```
-
-- `wg.Add(1)` antes de lanzar; `defer wg.Done()` dentro.
-- **Pasa `c` como argumento** a la goroutine (como en el esqueleto), no la
-  captures en el closure: la variable de bucle se reutiliza y todas las
-  goroutines verían el último valor. Pasarla como parámetro la fija.
-
-`context.Context` es cómo Go cancela y pone plazos:
-
-```go
-ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-defer cancel()
-// pasa ctx a operaciones lentas; si se vence, ctx.Done() se cierra.
-```
-
-`signal.NotifyContext` (usado en `main.go`) devuelve un `ctx` que se cancela
-al llegar Ctrl+C/SIGTERM. Así el agente cierra limpio.
-
-### 4.11 JSON: `encoding/json`
-
-Los *tags* entre backticks mapean campos a JSON:
-
-```go
-type Payload struct {
-	AgentVersion string `json:"agentVersion"`
-	CollectedAt  time.Time `json:"collectedAt"`
-}
-```
-
-- `json.Marshal(p)` → `[]byte, error` (serializa).
-- `json.Unmarshal(data, &target)` → deserializa.
-- `omitempty` omite el campo si es el cero-value (vacío, 0, nil).
-- Los campos deben empezar en mayúscula para ser exportables; el tag controla
-  el nombre JSON.
-
-En Hygeia, `payload/payload.go` es literalmente el contrato §9 convertido a
-structs con tags. Serializar un `*Payload` produce exactamente el JSON que
-espera el backend.
-
-### 4.12 Logging estructurado: `log/slog`
-
-```go
-log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-log.Info("heartbeat enviado", "nextIntervalSec", 15)
-log.Warn("colector falló", "name", "cpu", "err", err)
-```
-
-`slog` (stdlib desde Go 1.21) emite pares clave-valor. Es lo que usa el
-esqueleto. Para JSON en vez de texto, cambia a `slog.NewJSONHandler`.
-
-### 4.13 Punteros, en una frase
-
-`&x` = dirección de `x`; `*p` = valor en esa dirección. En el esqueleto los
-punteros aparecen en `m *payload.Metrics` (para mutar el struct compartido) y
-en `*CPUMetrics` (para que `omitempty` funcione: un puntero nil se omite, un
-puntero a struct vacío no).
+Los genéricos en Go son menos ubicuos que en Java o Rust. Se usan principalmente
+en **bibliotecas de estructuras de datos** y **algoritmos reutilizables**. En
+aplicación, la mayoría del código sigue sin usarlos.
 
 ---
 
-## 5. Módulos y dependencias
+## 5. Estructuras de datos
 
-Un **módulo** es un conjunto de paquetes versionados juntos. Se define en
-`go.mod` (en la raíz del repo). El de Hygeia:
+### 5.1 Arrays
+
+Longitud fija, parte del tipo:
+
+```go
+var a [3]int                    // [0, 0, 0]
+b := [3]int{1, 2, 3}            // [1, 2, 3]
+c := [...]int{1, 2, 3, 4}       // infiere tamaño: [4]int
+d := [3]int{0: 10, 2: 30}       // índices explícitos: [10, 0, 30]
+
+// [3]int y [4]int son TIPOS DISTINTOS
+```
+
+Los arrays se usan poco directamente; la estructura ubicua es el **slice**.
+
+### 5.2 Slices
+
+Un slice es una **vista flexible** sobre un array subyacente. Tiene longitud
+(`len`) y capacidad (`cap`):
+
+```go
+// Crear slices
+var s []int                       // nil, len=0
+s = []int{1, 2, 3}                // literal
+s = make([]int, 5)                // 5 ceros, len=5, cap=5
+s = make([]int, 5, 10)            // len=5, cap=10
+
+// Acceder y modificar
+s[0] = 99
+
+// Rebanar
+sub := s[1:3]                     // elementos 1 y 2 (semiabierto: [1,3))
+
+// Añadir elementos
+s = append(s, 4)                   // crece dinámicamente
+s = append(s, 5, 6, 7)            // varios a la vez
+s = append(s, otros...)
+
+// Copiar
+copia := make([]int, len(s))
+copy(copia, s)
+
+// Longitud y capacidad
+fmt.Println(len(s), cap(s))
+```
+
+**Truco mental:** `s[low:high]` incluye `low` y excluye `high`.
+`s[:]` es el slice entero. `s[low:]` desde `low` hasta el final.
+`s[:high]` desde el principio hasta `high` (excluido).
+
+**Peligro común:** rebanar no copia, apunta al mismo array subyacente. Si
+modificas un elemento en `sub`, puede cambiar `s` también. Para independizarlo:
+`sub := make([]T, n); copy(sub, original)`.
+
+### 5.3 Maps
+
+Diccionario / tabla hash desordenada:
+
+```go
+// Crear
+edades := map[string]int{
+	"Ana":  28,
+	"Luis": 35,
+}
+vacio := make(map[string]int)       // map vacío
+var nulo map[string]int              // nil (no se puede escribir)
+
+// Leer y escribir
+edades["Carlos"] = 42                // insertar/actualizar
+edad := edades["Ana"]                // leer (si no existe, cero-value: 0)
+
+// Comprobar existencia
+edad, ok := edades["John"]           // ok=false si no existe
+if !ok {
+	fmt.Println("no encontrado")
+}
+
+// Eliminar
+delete(edades, "Luis")
+
+// Iterar (orden NO garantizado)
+for nombre, edad := range edades {
+	fmt.Printf("%s tiene %d años\n", nombre, edad)
+}
+```
+
+### 5.4 Structs
+
+Agrupación de campos con nombre y tipo:
+
+```go
+type Persona struct {
+	Nombre   string
+	Edad     int
+	Activo   bool
+}
+
+// Crear
+p1 := Persona{"Ana", 28, true}            // por posición (frágil, evitar)
+p2 := Persona{Nombre: "Ana", Edad: 28}     // por nombre (idiomático)
+p3 := Persona{}                             // cero-value: "", 0, false
+
+// Acceder
+p2.Nombre = "Ana María"
+fmt.Println(p2.Edad)
+
+// Campos incrustados (composición, no herencia)
+type Empleado struct {
+	Persona           // "embedding": promociona campos de Persona
+	Salario  float64
+}
+
+e := Empleado{Persona: Persona{Nombre: "Luis"}, Salario: 50000}
+fmt.Println(e.Nombre)  // campo promocionado
+fmt.Println(e.Persona.Nombre) // acceso explícito (equivalente)
+```
+
+Los **tags** de struct son cadenas que anotan campos para bibliotecas (`json`,
+`xml`, `yaml`, `toml`, validación, ORMs...). Van entre backticks:
+
+```go
+type Config struct {
+	Host string `json:"host" yaml:"host" validate:"required"`
+	Port int    `json:"port" yaml:"port"`
+}
+```
+
+---
+
+## 6. Métodos e interfaces
+
+### 6.1 Métodos
+
+Un método es una función con un **receptor**:
+
+```go
+type Contador struct {
+	valor int
+}
+
+// Receptor por valor (no muta)
+func (c Contador) Valor() int {
+	return c.valor
+}
+
+// Receptor por puntero (muta el struct)
+func (c *Contador) Incrementar() {
+	c.valor++
+}
+
+// Uso
+c := Contador{}
+c.Incrementar() // Go convierte c en &c automáticamente
+c.Valor()       // 1
+```
+
+Puedes definir métodos sobre cualquier tipo definido en tu paquete (excepto
+punteros e interfaces).
+
+### 6.2 Interfaces
+
+Una interfaz declara un **conjunto de métodos**. Cualquier tipo que implementa
+todos esos métodos **automáticamente** satisface la interfaz. **No necesitas
+declarar `implements`**: es satisfacción implícita.
+
+```go
+// Declaración
+type Hablador interface {
+	Hablar() string
+}
+
+// Implementación implícita
+type Perro struct{ Nombre string }
+
+func (p Perro) Hablar() string {
+	return "Guau, soy " + p.Nombre
+}
+
+type Gato struct{ Nombre string }
+
+func (g Gato) Hablar() string {
+	return "Miau, soy " + g.Nombre
+}
+
+// Polimorfismo: cualquier Hablador
+func presentar(h Hablador) {
+	fmt.Println(h.Hablar())
+}
+
+// Uso
+presentar(Perro{"Firulais"})
+presentar(Gato{"Michi"})
+```
+
+**Interfaz vacía `any`** (antes `interface{}`): todos los tipos la satisfacen.
+Úsala con moderación; pierdes seguridad de tipos:
+
+```go
+var x any = "hola"
+s, ok := x.(string)   // type assertion
+```
+
+**Patrones comunes de interfaces:**
+
+```go
+// io.Reader y io.Writer: las interfaces más importantes de Go
+type Reader interface {
+	Read(p []byte) (n int, err error)
+}
+type Writer interface {
+	Write(p []byte) (n int, err error)
+}
+
+// error: la interfaz más simple
+type error interface {
+	Error() string
+}
+
+// fmt.Stringer: como __str__ en Python
+type Stringer interface {
+	String() string
+}
+```
+
+**Consejo:** define interfaces donde las **consumes**, no donde las
+**implementas**. Si tu paquete acepta algo que necesita leer, define `Reader`
+allí o usa el de `io`. No definas interfaces gigantes: las de la stdlib suelen
+tener 1-3 métodos.
+
+---
+
+## 7. Manejo de errores
+
+Go no tiene excepciones, `try`/`catch` ni `throw`. Los errores son **valores**
+que se devuelven y se comprueban explícitamente. El tipo `error` es una interfaz
+con un solo método:
+
+```go
+type error interface {
+	Error() string
+}
+```
+
+### 7.1 El patrón estándar
+
+```go
+func dividir(a, b int) (int, error) {
+	if b == 0 {
+		return 0, fmt.Errorf("división por cero: %d/%d", a, b)
+	}
+	return a / b, nil
+}
+
+resultado, err := dividir(10, 0)
+if err != nil {
+	fmt.Println("falló:", err)
+	return
+}
+fmt.Println("resultado:", resultado)
+```
+
+Un `nil` en la posición de error significa "todo bien". La convención más
+importante del lenguaje: **comprueba siempre el error**. El compilador no te
+obliga, pero tu código no será idiomático si no lo haces.
+
+### 7.2 Crear errores
+
+```go
+// Error simple
+err := errors.New("algo salió mal")
+
+// Error con formato
+err := fmt.Errorf("archivo %s: %w", nombre, errOriginal)
+
+// Error personalizado
+type ErrorValidacion struct {
+	Campo   string
+	Mensaje string
+}
+func (e *ErrorValidacion) Error() string {
+	return fmt.Sprintf("validación de %s: %s", e.Campo, e.Mensaje)
+}
+```
+
+### 7.3 Envolver, inspeccionar y desempaquetar (Go 1.13+)
+
+```go
+// Envolver: %w en fmt.Errorf conserva el error original
+err := fmt.Errorf("conexión a BD falló: %w", sql.ErrNoRows)
+
+// errors.Is: comprueba si un error ES otro (recorre la cadena de %w)
+if errors.Is(err, sql.ErrNoRows) {
+	// manejar "no encontrado"
+}
+
+// errors.As: desempaqueta un error a un tipo concreto
+var valErr *ErrorValidacion
+if errors.As(err, &valErr) {
+	fmt.Println("campo:", valErr.Campo)
+}
+```
+
+- `==` compara errores por identidad (no por texto).
+- `errors.Is` funciona aunque el error esté envuelto con `%w` varias veces.
+- `errors.As` extrae el error concreto sin importar cuántas capas tenga.
+
+### 7.4 Buenas prácticas
+
+- No uses `panic` para errores de negocio. `panic` es para bugs del programador.
+- Añade contexto al error al subir la pila: `fmt.Errorf("leyendo config: %w", err)`.
+- No pongas la palabra "error" en el mensaje (es redundante).
+- No compares errores por su mensaje de texto (`err.Error() == "..."`). Usa
+  `errors.Is` o variables centinela.
+- En el nivel más alto (main), loguea o imprime el error y termina con gracia.
+
+---
+
+## 8. Concurrencia
+
+La concurrencia es el rasgo más distintivo de Go. Dos primitivas: **goroutines**
+(ejecución concurrente) y **canales** (comunicación entre goroutines).
+
+### 8.1 Goroutines
+
+Una goroutine es una tarea que se ejecuta concurrentemente. Lanzarla cuesta casi
+nada (unos KB de stack):
+
+```go
+func imprimir(msg string) {
+	for i := 0; i < 3; i++ {
+		fmt.Println(msg, i)
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func main() {
+	go imprimir("goroutine")   // se lanza y continúa
+	imprimir("main")           // se ejecuta en la goroutine principal
+	// "main" y "goroutine" se intercalan
+}
+```
+
+El programa termina cuando la goroutine principal (`main`) termina, aunque haya
+goroutines hijas ejecutándose. Para esperarlas, usa `sync.WaitGroup` o canales.
+
+### 8.2 `sync.WaitGroup`
+
+```go
+func main() {
+	var wg sync.WaitGroup
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(id int) {       // ⚠️ pasa id como parámetro, no captures la i del bucle
+			defer wg.Done()
+			fmt.Printf("tarea %d\n", id)
+		}(i)
+	}
+
+	wg.Wait()  // bloquea hasta que todas las goroutines llamen Done()
+	fmt.Println("todas las tareas terminaron")
+}
+```
+
+**Regla de oro:** pasa las variables del bucle como argumento a la goroutine. Si
+capturas `i` directamente, todas las goroutines verán el último valor del bucle
+(el compilador avisa de esto desde Go 1.22, pero el argumento explícito sigue
+siendo buena práctica).
+
+### 8.3 Canales
+
+Un canal es un conducto tipado por el que las goroutines envían y reciben
+valores. Es la forma idiomática de comunicarse:
+
+```go
+ch := make(chan int)       // canal sin búfer (bloquea hasta que alguien recibe)
+ch := make(chan int, 10)   // canal con búfer de 10 elementos
+
+// Enviar y recibir
+ch <- 42                   // enviar
+valor := <-ch              // recibir
+valor, ok := <-ch          // recibir con comprobación (ok=false si cerrado)
+
+// Cerrar
+close(ch)
+
+// Iterar sobre un canal hasta que se cierra
+for v := range ch {
+	fmt.Println(v)
+}
+```
+
+**Canal sin búfer:** el emisor se bloquea hasta que un receptor lee.
+**Canal con búfer:** el emisor se bloquea solo cuando el búfer se llena.
+
+### 8.4 `select`
+
+`select` espera a que **una** de varias operaciones de canal esté lista. Si
+varias están listas, elige una al azar (para evitar inanición):
+
+```go
+func main() {
+	ch1 := make(chan string)
+	ch2 := make(chan string)
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		ch1 <- "uno"
+	}()
+	go func() {
+		time.Sleep(2 * time.Second)
+		ch2 <- "dos"
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-ch1:
+			fmt.Println("ch1:", msg)
+		case msg := <-ch2:
+			fmt.Println("ch2:", msg)
+		case <-time.After(3 * time.Second):
+			fmt.Println("timeout")
+		}
+	}
+}
+```
+
+**Patrones con `select`:**
+
+```go
+// Timeout
+select {
+case res := <-ch:
+	fmt.Println(res)
+case <-time.After(5 * time.Second):
+	fmt.Println("demasiado lento")
+}
+
+// Bucle infinito con salida limpia
+for {
+	select {
+	case <-ctx.Done():
+		return
+	case msg := <-ch:
+		procesar(msg)
+	}
+}
+```
+
+### 8.5 `context.Context`
+
+`context.Context` transporta **plazos, cancelación y valores** a través de las
+llamadas. Es ubicuo en servidores HTTP,workers y cualquier código concurrente:
+
+```go
+// Crear contextos
+ctx := context.Background()                        // raíz (nunca cancelado)
+ctx, cancel := context.WithCancel(ctx)              // cancelable manualmente
+ctx, cancel := context.WithTimeout(ctx, 5*time.Second)  // con plazo
+ctx, cancel := context.WithDeadline(ctx, fecha)         // con fecha límite
+
+// Cancelar (llamar siempre con defer)
+defer cancel()
+
+// Valores (usar con moderación, solo para datos de request-scope)
+ctx = context.WithValue(ctx, "clave", valor)
+v := ctx.Value("clave")
+
+// Respetar cancelación en operaciones bloqueantes
+func trabajar(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()  // context.Canceled o context.DeadlineExceeded
+	case resultado := <-tareaLenta():
+		return procesar(resultado)
+	}
+}
+```
+
+**Reglas de `context`:**
+- Pásalo siempre como **primer parámetro** de la función.
+- No lo guardes en structs; pásalo explícitamente.
+- `context.Background()` solo en `main`, tests y código de entrada.
+- `context.TODO()` cuando no sabes qué contexto usar (marcador para implementar
+  después).
+- Los valores de contexto son para datos de alcance limitado (ID de petición,
+  trazabilidad). NUNCA para parámetros de negocio opcionales.
+
+### 8.6 `sync.Mutex` y `sync.RWMutex`
+
+Para cuando realmente necesitas compartir estado mutable entre goroutines:
+
+```go
+type ContadorSeguro struct {
+	mu    sync.Mutex
+	valor int
+}
+
+func (c *ContadorSeguro) Incrementar() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.valor++
+}
+
+func (c *ContadorSeguro) Valor() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.valor
+}
+
+// RWMutex permite múltiples lectores simultáneos
+type Cache struct {
+	mu    sync.RWMutex
+	datos map[string]string
+}
+
+func (c *Cache) Get(key string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.datos[key]
+}
+
+func (c *Cache) Set(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.datos[key] = value
+}
+```
+
+Otras primitivas: `sync.Once` (ejecutar exactamente una vez), `sync.Map`
+(mapa concurrente, rara vez mejor que `map` + `Mutex`), `sync.Pool` (pool de
+objetos temporales), `sync.Cond` (condición de espera).
+
+---
+
+## 9. Tour por la biblioteca estándar
+
+Go tiene una stdlib extensa y de alta calidad. Aquí los paquetes que más vas a
+usar.
+
+### 9.1 `fmt` — impresión con formato
+
+```go
+fmt.Print("sin salto de línea")
+fmt.Println("con salto de línea")
+fmt.Printf("formato: %s tiene %d años\n", "Ana", 28)
+
+// Verbos comunes
+// %s   string
+// %d   entero decimal
+// %f   float
+// %v   valor por defecto (el más usado)
+// %+v  valor con nombres de campo (structs)
+// %#v  representación Go-sintaxis
+// %T   tipo del valor
+// %t   bool
+// %q   string con comillas
+
+mensaje := fmt.Sprintf("resultado: %v", 42)  // devuelve string, no imprime
+```
+
+### 9.2 `encoding/json`
+
+```go
+type Persona struct {
+	Nombre string `json:"nombre"`
+	Edad   int    `json:"edad,omitempty"`
+	private string // campo no exportado (minúscula) -> ignorado por JSON
+}
+
+// Marshal: struct -> JSON []byte
+p := Persona{Nombre: "Ana", Edad: 28}
+data, err := json.Marshal(p)
+// data = {"nombre":"Ana","edad":28}
+
+// MarshalIndent: struct -> JSON legible
+data, err := json.MarshalIndent(p, "", "  ")
+
+// Unmarshal: JSON -> struct
+var p2 Persona
+err = json.Unmarshal(data, &p2)
+
+// Decodificar desde io.Reader (p. ej., http.Response.Body)
+dec := json.NewDecoder(resp.Body)
+err = dec.Decode(&p2)
+
+// Codificar a io.Writer
+enc := json.NewEncoder(os.Stdout)
+enc.SetIndent("", "  ")
+enc.Encode(p)
+
+// Tipo dinámico
+var cualquier cosa any
+json.Unmarshal(data, &cualquiercosa)
+m := cualquiercosa.(map[string]any) // type assertion
+```
+
+**Reglas de Marshal/Unmarshal:**
+- Solo campos exportados (mayúscula inicial).
+- Tags `json:"nombre"` cambian el nombre en el JSON.
+- `omitempty` omite el campo si tiene cero-value.
+- `-` (guion) excluye el campo completamente.
+- Los campos se asignan por nombre de tag o, si no hay tag, por nombre del campo
+  (case-insensitive).
+
+### 9.3 `net/http`
+
+```go
+// Servidor HTTP mínimo
+http.HandleFunc("/saludo", func(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Hola, %s", r.URL.Query().Get("nombre"))
+})
+http.ListenAndServe(":8080", nil)
+
+// Cliente HTTP
+client := &http.Client{Timeout: 10 * time.Second}
+
+resp, err := client.Get("https://api.example.com/datos")
+if err != nil { ... }
+defer resp.Body.Close()
+
+body, err := io.ReadAll(resp.Body)
+
+// POST con JSON
+payload := map[string]string{"clave": "valor"}
+data, _ := json.Marshal(payload)
+resp, err := client.Post(url, "application/json", bytes.NewReader(data))
+
+// Petición con headers y contexto
+req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+req.Header.Set("Authorization", "Bearer "+token)
+resp, err := client.Do(req)
+
+// Usar el cliente por defecto (paquete http)
+resp, err := http.Get(url)
+```
+
+### 9.4 `io` y `os` — entrada/salida y archivos
+
+```go
+// Leer archivo completo (Go 1.16+)
+data, err := os.ReadFile("archivo.txt")
+
+// Escribir archivo completo
+err := os.WriteFile("archivo.txt", data, 0o644)
+
+// Abrir para lectura
+f, err := os.Open("archivo.txt")
+defer f.Close()
+
+// Leer línea a línea
+scanner := bufio.NewScanner(f)
+for scanner.Scan() {
+	linea := scanner.Text()
+	fmt.Println(linea)
+}
+
+// Abrir para escritura (crea si no existe, añade al final)
+f, err := os.OpenFile("log.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+
+// Copiar entre readers y writers
+io.Copy(destino, origen)
+
+// Interfaces fundamentales
+var r io.Reader     // Read(p []byte) (n int, err error)
+var w io.Writer     // Write(p []byte) (n int, err error)
+var c io.Closer     // Close() error
+```
+
+### 9.5 `log/slog` — logging estructurado (Go 1.21+)
+
+```go
+// Logger de texto
+logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+// Logger JSON
+logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+// Niveles
+logger.Debug("detalle", "clave", valor)
+logger.Info("inicio", "puerto", 8080)
+logger.Warn("reintentando", "intento", 3)
+logger.Error("falló conexión", "err", err)
+
+// Con contexto
+logger.InfoContext(ctx, "petición procesada", "duración", d)
+
+// Logger por defecto (paquete slog)
+slog.Info("mensaje", "tag", "valor")
+```
+
+### 9.6 `time`
+
+```go
+ahora := time.Now()                   // hora local
+utc := time.Now().UTC()               // UTC
+futuro := ahora.Add(24 * time.Hour)   // +1 día
+
+// Formatear y parsear (¡referencia fija de Go!)
+// La referencia es: Mon Jan 2 15:04:05 MST 2006  (hora de nacimiento de Go)
+str := ahora.Format("2006-01-02 15:04:05")     // "2026-03-15 10:30:00"
+t, err := time.Parse("2006-01-02", "2026-03-15")
+
+// Duración
+d := 5 * time.Second
+time.Sleep(d)
+
+// Ticker (acción periódica)
+ticker := time.NewTicker(15 * time.Second)
+defer ticker.Stop()
+for range ticker.C { ... }
+
+// Timer (acción diferida, una vez)
+timer := time.NewTimer(5 * time.Second)
+<-timer.C
+
+// Timeout con context
+ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+defer cancel()
+```
+
+### 9.7 `strings` y `strconv`
+
+```go
+// strings
+strings.Contains("hola mundo", "mundo")     // true
+strings.HasPrefix("archivo.go", "archivo")   // true
+strings.Split("a,b,c", ",")                  // ["a", "b", "c"]
+strings.Join([]string{"a", "b"}, "-")         // "a-b"
+strings.TrimSpace("  hola  ")                 // "hola"
+strings.ToLower("HOLA")                       // "hola"
+strings.ReplaceAll("a-b-c", "-", "/")         // "a/b/c"
+
+// strconv: convertir strings a/desde números
+n, _ := strconv.Atoi("42")                   // string -> int
+s := strconv.Itoa(42)                        // int -> string
+f, _ := strconv.ParseFloat("3.14", 64)       // string -> float64
+s = strconv.FormatFloat(3.14, 'f', 2, 64)    // float64 -> string
+b, _ := strconv.ParseBool("true")            // string -> bool
+```
+
+### 9.8 `flag` — argumentos de línea de comandos
+
+```go
+var (
+	port    = flag.Int("port", 8080, "puerto del servidor")
+	verbose = flag.Bool("verbose", false, "modo detallado")
+	config  = flag.String("config", "config.toml", "ruta de configuración")
+)
+flag.Parse()
+
+fmt.Println("puerto:", *port)
+fmt.Println("config:", *config)
+```
+
+### 9.9 `embed` — embeber archivos en el binario (Go 1.16+)
+
+```go
+import _ "embed"
+
+//go:embed plantilla.html
+var plantilla string
+
+//go:embed static/*
+var staticFiles embed.FS
+```
+
+### 9.10 `sort` y `slices` (Go 1.21+)
+
+```go
+nums := []int{3, 1, 4, 1, 5}
+sort.Ints(nums)
+
+strs := []string{"z", "a", "m"}
+sort.Strings(strs)
+
+// Ordenar structs por campo
+type Persona struct{ Nombre string; Edad int }
+personas := []Persona{{"Zoe", 30}, {"Ana", 25}}
+sort.Slice(personas, func(i, j int) bool {
+	return personas[i].Nombre < personas[j].Nombre
+})
+
+// Con slices (Go 1.21+, más limpio)
+slices.SortFunc(personas, func(a, b Persona) int {
+	return cmp.Compare(a.Nombre, b.Nombre)
+})
+```
+
+---
+
+## 10. Módulos y dependencias
+
+Un **módulo** Go es un conjunto de paquetes versionados juntos. Se define en el
+archivo `go.mod` en la raíz del proyecto:
 
 ```
-module github.com/ProjectEllysia/Ellysia-Hygeia
+module github.com/usuario/proyecto
 
 go 1.22
+
+require (
+	github.com/gin-gonic/gin v1.9.1
+	golang.org/x/sync v0.5.0
+)
 ```
 
-- `module` = ruta única de importación (usa la URL del repo).
-- `go 1.22` = versión mínima de Go del módulo.
-
-Comandos clave:
+### 10.1 Comandos esenciales
 
 | Comando | Qué hace |
 |---|---|
-| `go mod init <ruta>` | Crea `go.mod` (ya hecho en este repo). |
-| `go get github.com/shirou/gopsutil/v4` | Añade una dependencia. |
-| `go mod tidy` | Añade lo que importas y quita lo que no usas; rellena `go.sum`. |
-| `go mod download` | Descarga dependencias a la caché (sin tocar el código). |
-| `go list -m all` | Lista todas las dependencias. |
+| `go mod init github.com/usuario/proyecto` | Crea `go.mod` en el directorio actual. |
+| `go get pkg@version` | Añade (o actualiza) una dependencia. |
+| `go get -u ./...` | Actualiza todas las dependencias a la última versión menor. |
+| `go mod tidy` | Añade dependencias que usas, quita las que no, rellena `go.sum`. |
+| `go mod download` | Descarga todas las dependencias a la caché local. |
+| `go mod why pkg` | ¿Por qué este módulo necesita esa dependencia? |
+| `go mod graph` | Muestra el grafo completo de dependencias. |
 
-`go.sum` es un fichero de **checksums** que garantiza que las dependencias no
-han cambiado. **Se commitea** junto con `go.mod`.
+`go.sum` contiene checksums criptográficos de cada dependencia. **Se commitea**
+siempre. Garantiza que todos los desarrolladores y CI usen exactamente las
+mismas versiones.
 
-El esqueleto actual **no tiene dependencias externas** (usa solo stdlib), por
-eso no hay `require` en `go.mod` ni fichero `go.sum`. En cuanto añadas
-`gopsutil` (§7.1), `go mod tidy` creará `go.sum`.
-
-> **GOPRIVATE:** si algún día dependes de un repo privado de GitHub, configura
-> `go env -w GOPRIVATE=github.com/ProjectEllysia/*` para que Go no consulte el
-> proxy público.
-
----
-
-## 6. Estructura del proyecto Hygeia (cómo leer el esqueleto)
+### 10.2 Versiones y versionado semántico
 
 ```
-Ellysia-Hygeia/
-├── go.mod                  módulo: github.com/ProjectEllysia/Ellysia-Hygeia
-├── main.go                 arranque, señales, bucle principal, fan-out paralelo
-├── version.go              const AgentVersion (inyectable con -ldflags)
-├── config.example.toml     ejemplo de config (cópialo a config.toml)
-├── payload/
-│   └── payload.go          tipos del contrato §9 (Payload, Metrics, ...)
-├── config/
-│   └── config.go           Config + Load (fichero TOML + override por env)
-├── collector/
-│   ├── collector.go        interfaz Collector + Registry
-│   ├── cpu.go              CPUCollector
-│   ├── memory.go           MemoryCollector
-│   ├── disk.go             DiskCollector
-│   ├── network.go          NetworkCollector
-│   ├── processes.go        ProcessCollector
-│   └── host.go             Host() -> payload.HostInfo
-├── buffer/
-│   └── buffer.go           RingBuffer en disco (resiliencia)
-└── shipper/
-    └── shipper.go          POST /ingest + gzip + backoff
+github.com/foo/bar v1.2.3
+                   │ │ │
+                   │ │ └─ patch (bug fixes, retrocompatibles)
+                   │ └─── minor (features, retrocompatibles)
+                   └───── major (breaking changes, incompatibles)
 ```
 
-### Por qué `payload/` es un paquete aparte
+Go usa **Minimum Version Selection** (MVS): no elige la versión más reciente,
+sino la **mínima** que satisface todos los `require` del grafo. Esto es
+determinista y evita el "dependency hell".
 
-El contrato de ingesta (§9) lo comparten **tres** paquetes:
-- `collector` rellena `Metrics`,
-- `shipper` envía `Payload`,
-- `buffer` almacena `Payload`.
+### 10.3 `GOPROXY` y repos privados
 
-Si los tipos vivieran en `collector`, entonces `shipper` y `buffer` dependerían
-de `collector`, lo cual no tiene sentido (un "enviador" no debería conocer a los
-"recolectores"). Al aislarlos en `payload/`, las dependencias forman un grafo
-limpio sin ciclos:
-
-```
-payload  ◀──  collector
-payload  ◀──  shipper      ◀──  main
-payload  ◀──  buffer
-config   ◀──  main
-```
-
-### El flujo de un ciclo (`main.go` → `runOnce`)
-
-1. `collectPayload` lanza cada colector en su propia goroutine (paralelo), con
-   un `context.WithTimeout` de 5 s por colector. Cada uno escribe un campo
-   **distinto** de `p.Metrics`, así no hace falta mutex.
-2. `shp.Send(ctx, p)` envía el heartbeat. Si falla, `buf.Push(p)` lo guarda.
-3. Si el envío va bien, `drainBuffer` intenta vaciar lo acumulado.
-
-### Dónde están los `TODO`
-
-Cada `TODO` del esqueleto marca exactamente qué falta para la Fase 1 real:
-
-| Archivo | TODO |
-|---|---|
-| `config/config.go` | parsear el fichero TOML (§7.2) |
-| `collector/cpu.go` | leer CPU con gopsutil (§7.1) |
-| `collector/memory.go` | leer memoria con gopsutil |
-| `collector/disk.go` | leer disco con gopsutil |
-| `collector/network.go` | leer red + calcular tasa (delta/tiempo) |
-| `collector/processes.go` | procesos + top-N |
-| `collector/host.go` | kernel + uptime con gopsutil |
-| `shipper/shipper.go` | POST + gzip + backoff (§7.3) |
-| `buffer/buffer.go` | ring en disco acotado (§7.4) |
-| `main.go` | auto-ajustar el intervalo con `resp.NextIntervalSec` |
-
----
-
-## 7. Implementar los TODO (gopsutil, TOML, shipper, buffer)
-
-### 7.1 Añadir `gopsutil` y rellenar un colector
-
-Primero, añade la dependencia y descárgala:
+Por defecto Go descarga módulos a través de `proxy.golang.org`. Para repos
+privados:
 
 ```powershell
-go get github.com/shirou/gopsutil/v4
-go mod tidy
+go env -w GOPRIVATE=github.com/mi-empresa/*
+go env -w GONOSUMDB=github.com/mi-empresa/*
 ```
 
-Esto añade a `go.mod`:
+### 10.4 Workspaces (`go.work`) — Go 1.18+
+
+Cuando editas varios módulos a la vez (p. ej., un servicio y su biblioteca
+compartida), un workspace te permite trabajar en ambos sin `replace` en
+`go.mod`:
+
 ```
-require github.com/shirou/gopsutil/v4 v4.x.y
-```
-y crea `go.sum`. A partir de aquí, los subpaquetes se importan como
-`github.com/shirou/gopsutil/v4/cpu`, `.../mem`, `.../disk`, `.../net`,
-`.../process`, `.../host`, `.../load`.
+go 1.22
 
-**Ejemplo: `collector/cpu.go` real:**
-
-```go
-package collector
-
-import (
-	"context"
-	"time"
-
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
-	"github.com/shirou/gopsutil/v4/cpu"
-	"github.com/shirou/gopsutil/v4/load"
+use (
+	./servicio
+	./libreria
 )
-
-type CPUCollector struct{}
-
-func NewCPU() Collector { return &CPUCollector{} }
-
-func (c *CPUCollector) Name() string { return "cpu" }
-
-func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
-	// Uso global y por core. cpu.Percent bloquea `interval` midiendo.
-	perCore, err := cpu.Percent(time.Second, true)
-	if err != nil {
-		return err
-	}
-	global := 0.0
-	for _, v := range perCore {
-		global += v
-	}
-	if len(perCore) > 0 {
-		global /= float64(len(perCore))
-	}
-
-	out := &payload.CPUMetrics{
-		UsagePct:   global,
-		PerCorePct: perCore,
-	}
-
-	// load average (en Windows load.Avg() suele devolver error: omíteme con gracia).
-	if avg, err := load.Avg(); err == nil {
-		out.LoadAvg = []float64{avg.Load1, avg.Load5, avg.Load15}
-	}
-
-	m.CPU = out
-	return nil
-}
 ```
 
-Puntos clave:
-- `cpu.Percent(time.Second, true)` **mide durante 1 s** (bloquea esa goroutine,
-  pero como cada colector va en la suya, no bloquea a los demás).
-- Si algo falla en una plataforma, **devuelve error** y el bucle lo loguea pero
-  el agente no cae (README §5: "degrada con elegancia").
-- El resto de colectores siguen el mismo patrón: importas el subpaquete de
-  gopsutil, llamas a su función, mapeas al tipo de `payload`.
-
-**Memoria** (`mem.VirtualMemory()` → `.Total`, `.Used`, `.UsedPercent`).
-**Disco** (`disk.Partitions(true)` itera; `disk.Usage(p.Mountpoint)` por cada
-uno; filtra `//`/loop en Linux).
-**Red**: `net.IOCounters(true)` da **acumulados**; el contrato pide **tasa**.
-Guarda el snapshot anterior en el struct del collector y calcula
-`(actual - anterior) / segundos`. Por eso `NetworkCollector` debería tener
-campos (p. ej. `last map[string]net.IOCountersStat` y `lastTime time.Time`).
-**Procesos**: `process.Processes()`; por cada `p`: `p.Name()`,
-`p.CPUPercent()`, `p.MemoryPercent()`; ordena y quédate con el top-N.
-**Host**: `host.Info()` → `.KernelVersion`, `.Uptime`.
-
-### 7.2 Parsear el fichero TOML (`config/config.go`)
-
-Añade un parser TOML (`pelletier/go-toml/v2` es cómodo y respeta los tags
-`toml:"..."` que ya pusimos en el `Config`):
-
-```powershell
-go get github.com/pelletier/go-toml/v2
-go mod tidy
-```
-
-Y rellena `Load`:
-
-```go
-func Load(path string) (*Config, error) {
-	c := &Config{
-		IntervalSec: 15,
-		BufferPath:  "hygeia-buffer.jsonl",
-		Collectors:  []string{"cpu", "memory", "disk", "network", "processes"},
-	}
-	data, err := os.ReadFile(path)
-	if err == nil {
-		if err := toml.Unmarshal(data, c); err != nil {
-			return nil, fmt.Errorf("config: parseando %q: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("config: leyendo %q: %w", path, err)
-	}
-	if err := applyEnv(c); err != nil {
-		return nil, err
-	}
-	// ... validaciones serverUrl / agentKey ...
-	return c, nil
-}
-```
-
-Ahora el flujo es: **fichero como base → entorno lo sobreescribe → validación**.
-Mientras no exista `config.toml`, el agente sigue funcionando por env vars.
-
-### 7.3 El shipper (`shipper/shipper.go`)
-
-```go
-func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse, error) {
-	body, err := json.Marshal(p)
-	if err != nil {
-		return nil, fmt.Errorf("shipper: marshal: %w", err)
-	}
-
-	var gz bytes.Buffer
-	gzw := gzip.NewWriter(&gz)
-	if _, err := gzw.Write(body); err != nil {
-		return nil, err
-	}
-	if err := gzw.Close(); err != nil {
-		return nil, err
-	}
-
-	url := strings.TrimRight(s.serverURL, "/") + "/ingest"
-	backoff := time.Second
-	for attempt := 0; attempt < 3; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(gz.Bytes()))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+s.agentKey)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Content-Encoding", "gzip")
-
-		resp, err := s.client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			select {
-			case <-time.After(backoff):
-				backoff *= 2
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 500 {
-			resp.Body.Close()
-			select {
-			case <-time.After(backoff):
-				backoff *= 2
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		if resp.StatusCode >= 400 {
-			return nil, fmt.Errorf("shipper: backend respondió %s", resp.Status)
-		}
-		var r IngestResponse
-		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
-			return nil, fmt.Errorf("shipper: decode respuesta: %w", err)
-		}
-		return &r, nil
-	}
-	return nil, errors.New("shipper: agotados los reintentos")
-}
-```
-
-Observa el patrón: el `ctx` se propaga a `http.NewRequestWithContext`, así un
-SIGTERM cancela la petición en vuelo. El backoff duplica el espera en cada
-intento (1 s → 2 s → 4 s). Nunca `InsecureSkipVerify: true` (README §5): el
-`http.Client` por defecto ya valida TLS.
-
-### 7.4 El buffer en disco (`buffer/buffer.go`)
-
-La forma más sencilla y robusta: **JSONL** (un payload por línea) con un límite
-de líneas. `Push` appenda; `Pop` lee la primera y la trunca. Una implementación
-didáctica:
-
-```go
-func (b *RingBuffer) Push(p *payload.Payload) error {
-	data, err := json.Marshal(p)
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	f, err := os.OpenFile(b.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		return err
-	}
-	// TODO de verdad: si supera maxItems líneas, trunca las más viejas
-	// (p. ej. reescribe el fichero sin las primeras N líneas).
-	return nil
-}
-```
-
-`0o600` = permisos restringidos (solo el dueño lee/escribe), coherente con
-README §5. Para producción, un ring con head/tail en un fichero pre-asignado es
-más eficiente, pero JSONL + truncar es suficiente para la Fase 2.
-
-### 7.5 Auto-ajuste del intervalo (`main.go`)
-
-El backend responde `{"nextIntervalSec": 30}`. Para aplicarlo sin re-desplegar,
-`runOnce` debe poder reconstruir el `ticker`. Lo más limpio: sacar el ticker a
-una variable que `runOnce` puede reemplazar, o usar un canal en vez de ticker.
-Pequeño reto didáctico: prueba a sustituir `time.Ticker` por un `time.Timer`
-que renueves con `Reset(nextInterval)` en cada iteración.
+El comando `go run`, `go build`, etc., desde la raíz del workspace resuelven
+contra el código local de todos los módulos listados.
 
 ---
 
-## 8. Compilación y cross-compilación
+## 11. Testing
 
-### 8.1 Los tres comandos básicos
+### 11.1 Test unitario básico
 
-| Comando | Resultado |
-|---|---|
-| `go run .` | compila en memoria y ejecuta (desarrollo). |
-| `go build .` | deja el binario en la carpeta actual. |
-| `go install ./...` | compila y lo instala en `$GOPATH/bin` (en PATH). |
+Los tests viven en archivos `*_test.go` junto al código, en el mismo paquete:
 
-El `.` significa "el paquete del directorio actual". `./...` significa "todos
-los paquetes del módulo".
+```go
+// calculadora.go
+package calc
 
-### 8.2 Binario estático (sin dependencias del SO)
+func Suma(a, b int) int { return a + b }
+
+// calculadora_test.go
+package calc
+
+import "testing"
+
+func TestSuma(t *testing.T) {
+	resultado := Suma(2, 3)
+	if resultado != 5 {
+		t.Errorf("Suma(2, 3) = %d; se esperaba 5", resultado)
+	}
+}
+```
+
+`t.Errorf` marca el test como fallido pero **continúa**. `t.Fatalf` marca el
+fallo y **detiene** ese test inmediatamente. `t.Logf` imprime solo si el test
+falla o con `-v`.
+
+### 11.2 Tests de tabla (table-driven)
+
+Es el patrón idiomático de Go. Separas los datos de prueba de la lógica:
+
+```go
+func TestSuma(t *testing.T) {
+	casos := []struct {
+		nombre string
+		a, b   int
+		want   int
+	}{
+		{"positivos", 2, 3, 5},
+		{"cero", 0, 5, 5},
+		{"negativos", -1, -1, -2},
+		{"grandes", 1_000_000, 2_000_000, 3_000_000},
+	}
+
+	for _, tc := range casos {
+		t.Run(tc.nombre, func(t *testing.T) {
+			got := Suma(tc.a, tc.b)
+			if got != tc.want {
+				t.Errorf("Suma(%d, %d) = %d; want %d", tc.a, tc.b, got, tc.want)
+			}
+		})
+	}
+}
+```
+
+Con `t.Run` cada caso es un subtest independiente. Puedes ejecutar un subtest
+concreto: `go test -run TestSuma/positivos`.
+
+### 11.3 Mocking y `testify`
+
+Go favorece **interfaces** para hacer mocking sin dependencias externas. Sin
+embargo, `testify` (la biblioteca de testing más popular) ofrece `assert` y
+`mock`:
+
+```go
+import "github.com/stretchr/testify/assert"
+
+func TestSuma(t *testing.T) {
+	assert.Equal(t, 5, Suma(2, 3))
+	assert.NotNil(t, resultado)
+	assert.NoError(t, err)
+}
+```
+
+### 11.4 Ejecutar tests
+
+```powershell
+go test ./...                        # todos los paquetes
+go test -v ./...                     # verbose
+go test -run TestSuma ./calculadora  # filtrar por nombre
+go test -count=1 ./...               # desactivar caché
+go test -race ./...                  # detector de data races
+go test -cover ./...                 # % de cobertura
+go test -coverprofile=c.out ./...    # perfil de cobertura
+go tool cover -html=c.out           # informe visual de cobertura
+go test -bench=. ./...               # benchmarks (ver §11.5)
+go test -fuzz=FuzzX ./...            # fuzzing
+go test -timeout 30s ./...           # timeout global
+go test -short ./...                 # saltar tests largos
+```
+
+### 11.5 Benchmarks
+
+Los benchmarks miden rendimiento. Viven en `*_test.go` con firma
+`func BenchmarkXxx(b *testing.B)`:
+
+```go
+func BenchmarkSuma(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		Suma(1_000_000, 2_000_000)
+	}
+}
+```
+
+`b.N` se ajusta automáticamente para que el benchmark dure ~1 segundo:
+
+```powershell
+go test -bench=. ./...
+go test -bench=Suma -benchmem ./...    # incluye allocs/op y bytes/op
+go test -bench=. -count=5 ./...        # repetir para estabilidad
+```
+
+### 11.6 Fuzzing (Go 1.18+)
+
+El fuzzer genera entradas aleatorias para encontrar bugs:
+
+```go
+func FuzzSuma(f *testing.F) {
+	f.Add(2, 3)            // semilla
+	f.Fuzz(func(t *testing.T, a, b int) {
+		resultado := Suma(a, b)
+		if resultado < a {  // overflow?
+			t.Skip()
+		}
+	})
+}
+```
+
+```powershell
+go test -fuzz=FuzzSuma -fuzztime=30s ./...
+```
+
+---
+
+## 12. Compilación y cross-compilación
+
+### 12.1 Compilar
+
+```powershell
+go build .                      # binario con nombre del directorio
+go build -o mi-app.exe .       # nombre de salida personalizado
+go build -o mi-app.exe ./cmd/server  # compilar un paquete concreto
+```
+
+### 12.2 Binario estático
+
+Para un binario que no dependa de libc (portátil, ideal para contenedores
+`scratch` y despliegues):
 
 ```powershell
 $env:CGO_ENABLED = "0"
-go build -o hygeia.exe .
+go build -o mi-app .
 ```
-
-`CGO_ENABLED=0` desactiva el compilador de C → binario **totalmente estático**,
-sin depender de libc. Para un agente que se copia a hosts mínimos, esto es lo
-querido. En Linux:
 
 ```bash
-CGO_ENABLED=0 go build -o hygeia .
+CGO_ENABLED=0 go build -o mi-app .
 ```
 
-### 8.3 Cross-compilación
+Con `CGO_ENABLED=0`, Go usa una implementación Go pura de DNS, crypto, etc.
+El binario resultante depende solo del kernel del SO.
 
-Desde tu Windows puedes compilar para cualquier par `GOOS/GOARCH` sin instalar
-nada extra (gracias a `CGO_ENABLED=0`):
+### 12.3 Cross-compilación
+
+Desde cualquier SO produces binarios para cualquier otro con solo dos variables:
 
 ```powershell
-# Linux x86_64
+# Para Windows desde PowerShell
 $env:CGO_ENABLED = "0"; $env:GOOS = "linux"; $env:GOARCH = "amd64"
-go build -o hygeia-linux-amd64 .
-
-# Linux ARM64 (Raspberry Pi 4, servidores ARM)
-$env:GOARCH = "arm64"
-go build -o hygeia-linux-arm64 .
-
-# macOS Apple Silicon
-$env:GOOS = "darwin"; $env:GOARCH = "arm64"
-go build -o hygeia-darwin-arm64 .
-
-# Windows (restablece)
-$env:GOOS = "windows"; $env:GOARCH = "amd64"
-go build -o hygeia.exe .
+go build -o mi-app-linux .
 ```
-
-En Linux/macOS, en una sola línea:
-```bash
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o hygeia-linux-amd64 .
-```
-
-Pares comunes: `linux/amd64`, `linux/arm64`, `windows/amd64`,
-`darwin/arm64`, `darwin/amd64`. Lista completa: `go tool dist list`.
-
-> `gopsutil` es puramente Go y cross-compila sin problema con `CGO_ENABLED=0`.
-
-### 8.4 Inyectar la versión con `-ldflags`
-
-El esqueleto declara `const AgentVersion = "0.1.0-dev"` en `version.go`. En
-CI/builds, sobreescribe su valor en compile-time sin tocar el código:
-
-```powershell
-go build -ldflags "-s -w -X main.AgentVersion=1.0.0" -o hygeia.exe .
-```
-
-- `-X main.AgentVersion=1.0.0` reescribe el valor del símbolo `main.AgentVersion`.
-- `-s -w` quita tabla de símbolos e info de depuración → **binario más pequeño**
-  (típicamente ~30 % menos). Úsalo para releases, no para depurar.
-
-### 8.5 Reducir más el tamaño (opcional)
 
 ```bash
-upx --best --lzma hygeia
+# Para Linux/macOS
+GOOS=linux   GOARCH=amd64   go build -o mi-app-linux   .
+GOOS=linux   GOARCH=arm64   go build -o mi-app-arm64   .
+GOOS=windows GOARCH=amd64   go build -o mi-app.exe     .
+GOOS=darwin  GOARCH=amd64   go build -o mi-app-intel   .   # Mac Intel
+GOOS=darwin  GOARCH=arm64   go build -o mi-app-silicon .   # Mac M1/M2
 ```
 
-`upx` comprime el ejecutable. Útil si el tamaño es crítico; ojo: algunos AV
-marcan los binarios UPX. Para Hygeia (binario de unos MB) casi nunca hace
-falta.
+Pares habituales: `linux/amd64`, `linux/arm64`, `windows/amd64`,
+`darwin/amd64`, `darwin/arm64`. Lista completa: `go tool dist list`.
 
-### 8.6 Formatear y revisar
+### 12.4 `-ldflags` — flags del linker
+
+Inyectar valores en tiempo de compilación (versión, commit, fecha):
+
+```go
+package main
+
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
+
+func main() {
+	fmt.Printf("v%s (%s) %s\n", Version, Commit, Date)
+}
+```
 
 ```powershell
-gofmt -w .              # formatea todos los .go (idempotente)
-go vet ./...            # detecta errores comunes (shadowing, printf mal)
+go build -ldflags "-s -w -X main.Version=1.0.0 -X main.Commit=$(git rev-parse --short HEAD)" .
 ```
 
-Instala `golangci-lint` (metalinter) para más comprobaciones:
+- `-s`: elimina tabla de símbolos (sin efecto en rendimiento; reduce tamaño).
+- `-w`: elimina info de depuración DWARF (ídem).
+- `-X paquete.Variable=valor`: reescribe el valor de una variable string.
+
+Tamaño típico: un binario Go sencillo ocupa ~4-8 MB con `-ldflags "-s -w"`,
+~8-12 MB sin flags.
+
+### 12.5 Compresión extra (opcional)
+
+```bash
+upx --best --lzma mi-app
+```
+
+Reduce el binario ~60-70 %. Precaución: algunos antivirus marcan binarios
+comprimidos con UPX.
+
+---
+
+## 13. Herramientas y buenas prácticas
+
+### 13.1 Formateo
+
+`gofmt` formatea el código de forma canónica. No hay debate de estilo: el
+resultado de `gofmt` **es** el estilo Go.
+
+```powershell
+gofmt -w .                # formatea todos los .go del directorio
+gofmt -l .                # lista archivos que cambiarían (sin modificar)
+go fmt ./...              # alias de gofmt -w (sobre el módulo)
+```
+
+VS Code + extensión Go ejecuta `gofmt` automáticamente al guardar.
+
+### 13.2 Análisis estático
+
+```powershell
+go vet ./...               # incluido en Go: detecta bugs comunes
+```
+
+`go vet` detecta: `fmt.Printf` con argumentos incorrectos, `copylocks`
+(estructuras que no se deben copiar), shadowing de variables, `unreachable code`.
+
+**golangci-lint** (metalinter, muy recomendado):
+
 ```powershell
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 golangci-lint run
+golangci-lint run --enable-all  # con todos los linters
 ```
 
-VS Code con la extensión Go ya corre `gofmt` al guardar y `go vet` en vivo.
+Incluye decenas de checks: `errcheck`, `staticcheck`, `govet`, `ineffassign`,
+`bodyclose`, `gosec` (seguridad), etc.
 
----
-
-## 9. Testing y calidad
-
-### 9.1 Escribir un test
-
-Un test vive en un fichero `xxx_test.go` junto al código, en el mismo paquete:
-
-```go
-package collector
-
-import (
-	"context"
-	"testing"
-
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
-)
-
-func TestCPUCollector_FillsCPU(t *testing.T) {
-	c := NewCPU()
-	m := &payload.Metrics{}
-	if err := c.Collect(context.Background(), m); err != nil {
-		t.Fatalf("Collect falló: %v", err)
-	}
-	if m.CPU == nil {
-		t.Fatal("se esperaba m.CPU relleno")
-	}
-}
-```
-
-### 9.2 Tabla de tests (patrón idiomático)
-
-```go
-func TestRegistry_Build(t *testing.T) {
-	cases := []struct {
-		names []string
-		want  int
-	}{
-		{nil, 5},                       // por defecto, los 5
-		{[]string{"cpu", "memory"}, 2},
-		{[]string{"desconocido"}, 0},   // se ignora
-	}
-	r := NewRegistry()
-	for _, tc := range cases {
-		got := len(r.Build(tc.names))
-		if got != tc.want {
-			t.Errorf("Build(%v) = %d, want %d", tc.names, got, tc.want)
-		}
-	}
-}
-```
-
-### 9.3 Ejecutar
+### 13.3 Depuración con `dlv`
 
 ```powershell
-go test ./...            # todos los paquetes
-go test -run TestCPU ./collector
-go test -race ./...      # detector de data races (usa goroutines -> úsalo)
-go test -cover ./...     # cobertura
-go test -coverprofile=c.out ./... && go tool cover -html=c.out   # informe HTML
+go install github.com/go-delve/delve/cmd/dlv@latest
+dlv debug .              # depurar desde el inicio
+dlv exec ./mi-app        # depurar un binario ya compilado
 ```
 
-`-race` es **muy** recomendable en Hygeia: el `collectPayload` lanza goroutines
-que escriben el struct compartido; `-race` detectaría si dos colectores
-toquinasen el mismo campo.
+Desde VS Code: punto de ruptura en el gutter > F5.
 
----
-
-## 10. Empaquetado como servicio
-
-El binario solo hace peticiones salientes; el envoltorio del SO lo reinicia si
-cae (README §6).
-
-### 10.1 Linux — systemd
-
-`/etc/systemd/system/hygeia.service`:
-```ini
-[Unit]
-Description=Ellysia Hygeia agent
-After=network-online.target
-
-[Service]
-ExecStart=/usr/local/bin/hygeia
-Restart=always
-RestartSec=5
-User=hygeia
-Environment=HYGEIA_SERVER_URL=https://ellysia.tu-dominio/hygeia
-Environment=HYGEIA_AGENT_KEY=...
-
-[Install]
-WantedBy=multi-user.target
-```
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now hygeia
-journalctl -u hygeia -f
-```
-
-### 10.2 Windows — servicio
-
-`github.com/kardianos/service` abstrae Windows/Linux/macOS con la misma API:
-
-```powershell
-go get github.com/kardianos/service
-```
+### 13.4 Perfilado
 
 ```go
-type program struct{}
-func (p *program) Start(s service.Service) error { go p.run(); return nil }
-func (p *program) Stop(s service.Service) error  { return nil }
-func (p *program) run() {
-	// aquí va el mismo bucle de main.go, pero respondiendo a Start/Stop del SCM
-}
+import _ "net/http/pprof"   // añade rutas /debug/pprof/
+
+go func() {
+	http.ListenAndServe("localhost:6060", nil)
+}()
 ```
 
-### 10.3 macOS — launchd
+Luego: `go tool pprof http://localhost:6060/debug/pprof/heap` (memoria),
+`/profile` (CPU), `/goroutine`, etc.
 
-Un `plist` en `/Library/LaunchDaemons/` con `KeepAlive=true`. `kardianos/service`
-también lo genera.
+### 13.5 Checklist antes de commitear
 
----
+```powershell
+gofmt -w .
+go vet ./...
+go test ./...
+go test -race ./...
+go mod tidy
+```
 
-## 11. Flujo de trabajo diario
-
-1. **Arranca:** `go run .` (con `config.toml` o las env vars puestas).
-2. **Mientras programas:** guarda en VS Code → `gopls` compila en vivo y
-   subraya errores.
-3. **Antes de commitear:**
-   ```powershell
-   gofmt -w .
-   go vet ./...
-   go test ./...
-   go mod tidy
-   ```
-4. **Para un binario local:**
-   ```powershell
-   go build -o hygeia.exe .
-   ```
-5. **Para un release de otra plataforma:**
-   ```powershell
-   $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="amd64"
-   go build -ldflags "-s -w -X main.AgentVersion=1.0.0" -o hygeia-linux-amd64 .
-   ```
-
-> **Nunca commitees `config.toml`** con la `agentKey` real (ya está en
-> `.gitignore`-pendiente — añádelo). El repo trae `config.example.toml` como
-> plantilla; el `config.toml` real es por-host y no se versiona.
+Considera ejecutar esto como hook de pre-commit automático o en CI.
 
 ---
 
-## 12. Recursos oficiales
+## 14. Organización de proyectos Go
 
-- **Tour de Go** (interactivo, 2 h): https://go.dev/tour/ — empieza aquí.
-- **Effective Go**: https://go.dev/doc/effective_go — cómo se *escribe* Go bien.
-- **Referencia de la stdlib**: https://pkg.go.dev/std
-- **gopsutil (v4)**: https://pkg.go.dev/github.com/shirou/gopsutil/v4
-- **Cross-compilation**: https://go.dev/doc/install/source#environment
-- **Módulos**: https://go.dev/ref/mod
+Go no impone una estructura de directorios, pero la comunidad ha convergido en
+convenciones:
 
-### Orden sugerido para aprender, con este repo
+### 14.1 Proyecto pequeño (un comando)
 
-1. Tour de Go (secciones 1–3): sintaxis básica.
-2. Lee `payload/payload.go` y `config/config.go`: structs, tags, errores.
-3. Tour (sección de concurrencia) + lee `main.go`: goroutines, `WaitGroup`,
-   `context`.
-4. Haz §7.1 (CPU con gopsutil) y compueba con `go run .` que el JSON sale.
-5. Haz §7.3 (shipper) y prueba contra el backend (o un mock local).
-6. Haz §7.4 (buffer) y prueba tirando el backend.
-7. Cross-compila para Linux (§8.3) y despliega como servicio (§10).
+```
+mi-proyecto/
+├── go.mod
+├── main.go
+├── config.go
+└── handler.go
+```
+
+Todo en la raíz, paquete `main`. Ideal para herramientas, scripts, prototipos.
+
+### 14.2 Proyecto mediano (un comando, varios paquetes internos)
+
+```
+mi-proyecto/
+├── go.mod
+├── main.go                # package main, función main
+├── config/
+│   └── config.go          # package config
+├── store/
+│   └── store.go           # package store
+└── api/
+    └── server.go          # package api
+```
+
+La raíz es `package main`. El resto son paquetes internos de dominio. No hay
+`src/`, `internal/` ni `pkg/` por defecto hasta que el proyecto crece.
+
+### 14.3 Proyecto grande (múltiples comandos, bibliotecas públicas)
+
+```
+mi-proyecto/
+├── go.mod
+├── cmd/
+│   ├── server/main.go     # comando servidor
+│   └── worker/main.go     # comando worker
+├── internal/              # paquetes privados (Go prohíbe importarlos desde fuera del módulo)
+│   ├── store/
+│   └── service/
+├── pkg/                   # bibliotecas públicas para consumidores externos (uso controvertido)
+│   └── client/
+├── api/                   # definiciones gRPC / OpenAPI
+├── test/                  # tests de integración / e2e
+└── docs/
+```
+
+- `cmd/`: un subdirectorio por cada comando. Cada uno es un `package main`.
+- `internal/`: el compilador impide que otros módulos importen estos paquetes.
+  Es el mecanismo de encapsulación de Go.
+- `pkg/`: paquetes que sí pueden ser importados por módulos externos. Mucha
+  gente no usa `pkg/` y deja los paquetes públicos a la raíz.
+- `go.mod` siempre en la raíz del repo.
+
+### 14.4 Nombrado de paquetes
+
+- **Todo en minúsculas, sin guiones ni underscores.** `httpclient`, no
+  `http-client` ni `http_client`.
+- El nombre del paquete debe ser corto, descriptivo y **distinto del nombre del
+  directorio si el directorio ya da contexto** (esto es controvertido; la stdlib
+  lo hace: `package http` en `net/http/`).
+- Evita nombres genéricos: `util`, `common`, `helper`, `misc`. Si un paquete se
+  llama `util`, probablemente deberías dividirlo.
 
 ---
 
-*Esta guía acompaña al documento de diseño (`README.md`). Para la filosofía,
-métricas, fases y el contrato de ingesta, consulta el README.*
+## 15. Recursos oficiales
+
+| Recurso | Enlace | Propósito |
+|---|---|---|
+| Tour de Go | https://go.dev/tour/ | Aprender sintaxis en el navegador (2-3 h). Empieza aquí. |
+| Effective Go | https://go.dev/doc/effective_go | Cómo escribir Go idiomático. |
+| Especificación | https://go.dev/ref/spec | La especificación formal (sorprendentemente legible). |
+| Stdlib | https://pkg.go.dev/std | Documentación de cada paquete estándar. |
+| Go Blog | https://go.dev/blog/ | Artículos oficiales, notas de versión. |
+| Go by Example | https://gobyexample.com/ | Ejemplos autocontenidos de cada concepto. |
+| Awesome Go | https://github.com/avelino/awesome-go | Lista curada de bibliotecas. |
+| Learn Go with Tests | https://quii.gitbook.io/learn-go-with-tests | Aprender Go guiado por tests (muy didáctico). |
+| 100 Go Mistakes | https://100go.co/ | Errores comunes y cómo evitarlos. |
+
+### Ruta de aprendizaje sugerida
+
+1. Tour de Go (básico + métodos/interfaces + concurrencia).
+2. Lee esta guía por encima para situar cada concepto.
+3. Escribe algo real: un CLI, una API HTTP pequeña, una herramienta.
+4. Vuelve a §8 (concurrencia) cuando tu programa lo pida: es donde Go brilla.
+5. Aplica §13 y §14 cuando el proyecto crezca y necesites orden.
+
+---
+
+*Guía autocontenida. No depende de ningún proyecto concreto.*
