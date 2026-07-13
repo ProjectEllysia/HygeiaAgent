@@ -68,7 +68,8 @@ func runOnce(
 	p := collectPayload(ctx, log, cs)
 
 	resp, err := shp.Send(ctx, p)
-	if err != nil {
+	is_error := err != nil
+	if is_error {
 		log.Warn("envío fallido, guardando en buffer", "err", err)
 		if perr := buf.Push(p); perr != nil {
 			log.Error("no se pudo guardar en buffer", "err", perr)
