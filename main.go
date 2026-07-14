@@ -45,26 +45,36 @@ func main() {
 		"collectors", len(collectors),
 	)
 
-	runOnce(ctx, log, collectors, buf, shp)
+	// Estado mutable entre ciclos (intervalo auto-ajustable). Se accede desde
+	// el bucle principal (sin concurrencia), por lo que no necesita mutex.
+	currentInterval := interval
+	runOnce(ctx, log, collectors, buf, shp, currentInterval)
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("cerrando agente")
 			return
 		case <-ticker.C:
-			runOnce(ctx, log, collectors, buf, shp)
+			newInterval := runOnce(ctx, log, collectors, buf, shp, currentInterval)
+			if newInterval > 0 && newInterval != currentInterval {
+				currentInterval = newInterval
+				ticker.Reset(newInterval)
+				log.Info("intervalo auto-ajustado por backend", "intervalSec", int64(newInterval/time.Second))
+			}
 		}
 	}
 }
 
 // runOnce ejecuta un ciclo completo: recolectar -> enviar -> (drenar buffer).
+// Devuelve el nuevo intervalo sugerido por el backend (0 = sin cambio).
 func runOnce(
 	ctx context.Context,
 	log *slog.Logger,
 	cs []collector.Collector,
 	buf *buffer.RingBuffer,
 	shp *shipper.Shipper,
-) {
+	_ time.Duration,
+) time.Duration {
 	p := collectPayload(ctx, log, cs)
 
 	resp, err := shp.Send(ctx, p)
@@ -73,12 +83,11 @@ func runOnce(
 		if perr := buf.Push(p); perr != nil {
 			log.Error("no se pudo guardar en buffer", "err", perr)
 		}
-		return
+		return 0
 	}
 	log.Info("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
-	// TODO: si resp.NextIntervalSec difiere del intervalo actual, reconstruir
-	// el ticker para auto-ajustar el agente sin re-desplegar (README §9).
 	drainBuffer(ctx, log, buf, shp)
+	return time.Duration(resp.NextIntervalSec) * time.Second
 }
 
 // collectPayload lanza los colectores en paralelo (goroutines) con timeout
@@ -116,6 +125,9 @@ func drainBuffer(ctx context.Context, log *slog.Logger, buf *buffer.RingBuffer, 
 		}
 		if _, err := shp.Send(ctx, p); err != nil {
 			log.Warn("drenado interrumpido, reintentará más tarde", "err", err)
+			// devolver el payload al buffer para no perderlo: reintento en el
+			// próximo ciclo exitoso.
+			_ = buf.Push(p)
 			return
 		}
 	}
