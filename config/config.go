@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Config es la configuración del agente. Se carga de un fichero TOML
@@ -17,8 +19,9 @@ type Config struct {
 	BufferPath  string   `toml:"bufferPath"`
 }
 
-// Load lee el fichero de config (TODO: parse TOML) y aplica los overrides
-// de entorno. Devuelve error si faltan los campos obligatorios.
+// Load lee el fichero de config TOML y aplica los overrides de entorno.
+// Devuelve error si faltan los campos obligatorios. Si el fichero no
+// existe no es fatal: la config puede venir íntegramente de entorno.
 func Load(path string) (*Config, error) {
 	c := &Config{
 		IntervalSec: 15,
@@ -26,12 +29,19 @@ func Load(path string) (*Config, error) {
 		Collectors:  []string{"cpu", "memory", "disk", "network", "processes"},
 	}
 
-	// TODO: parsear el fichero TOML en `path` con, p. ej.:
-	//   github.com/pelletier/go-toml/v2  ->  toml.Unmarshal(data, c)
-	// Mientras tanto, la config se entrega por variables de entorno.
+	if data, err := os.ReadFile(path); err == nil {
+		if err := toml.Unmarshal(data, c); err != nil {
+			return nil, fmt.Errorf("config: parseando %q: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("config: leyendo %q: %w", path, err)
+	}
 
 	if err := applyEnv(c); err != nil {
 		return nil, err
+	}
+	if c.IntervalSec <= 0 {
+		c.IntervalSec = 15
 	}
 	if c.ServerURL == "" {
 		return nil, fmt.Errorf("config: serverUrl es obligatorio (fichero %q o HYGEIA_SERVER_URL)", path)
