@@ -32,13 +32,19 @@ import (
 // del agente, que lo marca el backend (§1).
 const pollInterval = 5 * time.Second
 
+// tickInterval refresca solo el texto de "Último envío" (relativo: "hace Ns")
+// entre sondeos reales al servicio, para que el contador no se quede parado
+// hasta el siguiente pollInterval.
+const tickInterval = 1 * time.Second
+
 // menu agrupa los elementos cuyo texto se refresca en cada sondeo.
 type menu struct {
-	state    *systray.MenuItem
-	lastPush *systray.MenuItem
-	buffer   *systray.MenuItem
-	host     *systray.MenuItem
-	enroll   *systray.MenuItem
+	state      *systray.MenuItem
+	lastPush   *systray.MenuItem
+	buffer     *systray.MenuItem
+	host       *systray.MenuItem
+	enroll     *systray.MenuItem
+	lastPushAt time.Time // último valor conocido, para el retick de 1s sin volver a sondear
 }
 
 func main() {
@@ -122,7 +128,6 @@ func onReady() {
 	m.enroll = systray.AddMenuItem("Introducir clave de agente…", "Dar de alta este activo")
 	m.enroll.Hide()
 
-	systray.AddSeparator()
 	startup := systray.AddMenuItemCheckbox("Arrancar con la sesión", "Abrir este icono al iniciar sesión", autostartEnabled())
 	systray.AddMenuItem(fmt.Sprintf("Versión %s", version.Version), "").Disable()
 	quit := systray.AddMenuItem("Salir", "Cierra el icono (el servicio sigue corriendo)")
@@ -131,12 +136,18 @@ func onReady() {
 	refresh(client, m)
 
 	ticker := time.NewTicker(pollInterval)
+	uiTicker := time.NewTicker(tickInterval)
 	go func() {
 		defer ticker.Stop()
+		defer uiTicker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				refresh(client, m)
+			case <-uiTicker.C:
+				if !m.lastPushAt.IsZero() {
+					m.lastPush.SetTitle("Último envío: " + formatLastPush(m.lastPushAt))
+				}
 			case <-m.enroll.ClickedCh:
 				promptEnroll(client, m)
 			case <-startup.ClickedCh:
@@ -198,6 +209,7 @@ func refresh(client *control.Client, m *menu) {
 		systray.SetTooltip("Hygeia — servicio no disponible")
 		m.state.SetTitle("Estado: servicio no disponible")
 		m.lastPush.SetTitle("Último envío: —")
+		m.lastPushAt = time.Time{}
 		m.buffer.SetTitle("Buffer: —")
 		m.host.SetTitle("Host: —")
 		m.enroll.Hide()
@@ -208,6 +220,7 @@ func refresh(client *control.Client, m *menu) {
 	systray.SetTooltip("Hygeia — " + stateLabel(st.State))
 	m.state.SetTitle("Estado: " + stateLabel(st.State))
 	m.lastPush.SetTitle("Último envío: " + formatLastPush(st.LastPushAt))
+	m.lastPushAt = st.LastPushAt
 	m.buffer.SetTitle(fmt.Sprintf("Buffer: %d pendientes", st.BufferSize))
 
 	host := st.Hostname
