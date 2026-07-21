@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"sync"
 	"time"
@@ -111,8 +112,6 @@ func (a *Agent) Enroll(agentKey string) error {
 // Run ejecuta el bucle principal hasta que ctx se cancele.
 func (a *Agent) Run(ctx context.Context) {
 	interval := time.Duration(a.cfg.IntervalSec) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
 	a.log.Info("hygeia iniciado",
 		"version", version.Version,
@@ -121,6 +120,14 @@ func (a *Agent) Run(ctx context.Context) {
 		"collectors", len(a.collectors),
 		"configurado", a.cfg.IsConfigured(),
 	)
+
+	if !a.sleepJitter(ctx, interval) {
+		a.log.Info("cerrando agente")
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	current := interval
 	a.tick(ctx, &current, ticker)
@@ -132,6 +139,30 @@ func (a *Agent) Run(ctx context.Context) {
 		case <-ticker.C:
 			a.tick(ctx, &current, ticker)
 		}
+	}
+}
+
+// sleepJitter espera un tiempo aleatorio en [0, interval) antes del primer
+// ciclo (plan §12.2, Tier 1). Sin esto, un reinicio simultáneo de una flota
+// entera (corte eléctrico, actualización de Windows en todos los hosts a la
+// vez) hace que todos los agentes golpeen el backend en el mismo segundo.
+// Devuelve false si ctx se canceló durante la espera (arranque interrumpido).
+func (a *Agent) sleepJitter(ctx context.Context, interval time.Duration) bool {
+	if interval <= 0 {
+		return true
+	}
+	jitter := time.Duration(rand.Int64N(int64(interval)))
+	if jitter <= 0 {
+		return true
+	}
+	a.log.Info("esperando jitter de arranque", "duracion", jitter)
+	timer := time.NewTimer(jitter)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

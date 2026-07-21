@@ -449,11 +449,11 @@ README dice que significa. **Backend: No.**
 
 #### Tier 1 — alto impacto, bajo esfuerzo (hacer ya)
 
-| Mejora | Backend |
-|---|---|
-| **§12.1** Corregir `topCpu` (media histórica → tasa reciente, patrón de `network.go`) | No |
-| **Mutex interno en `buffer.RingBuffer`.** `agent.Status()` (goroutine del canal de control) llama a `buf.Len()` mientras el bucle principal (otra goroutine) llama a `buf.Push()`/`buf.Pop()` sin ninguna sincronización compartida — `agent.go` protege sus propios campos con `a.mu`, pero `Push`/`Pop` se invocan fuera de ese lock (`runOnce`/`drainBuffer`). El propio `RingBuffer` debe ser thread-safe por diseño (es la convención Go para un tipo de uso concurrente), no depender de que el caller lo serialice correctamente — y hoy no lo hace. | No |
-| **Jitter de arranque** antes del primer tick (`rand` proporcional a `intervalSec`). Sin él, un reinicio masivo de flota (corte eléctrico, actualización de Windows) hace que todos los agentes golpeen `/ingest` en el mismo segundo. | No |
+| Mejora | Backend | Estado |
+|---|---|---|
+| **§12.1** Corregir `topCpu` (media histórica → tasa reciente, patrón de `network.go`) | No | ✅ |
+| **Mutex interno en `buffer.RingBuffer`.** `agent.Status()` (goroutine del canal de control) llama a `buf.Len()` mientras el bucle principal (otra goroutine) llama a `buf.Push()`/`buf.Pop()` sin ninguna sincronización compartida — `agent.go` protege sus propios campos con `a.mu`, pero `Push`/`Pop` se invocan fuera de ese lock (`runOnce`/`drainBuffer`). El propio `RingBuffer` debe ser thread-safe por diseño (es la convención Go para un tipo de uso concurrente), no depender de que el caller lo serialice correctamente — y hoy no lo hace. | No | ✅ |
+| **Jitter de arranque** antes del primer tick (`rand` proporcional a `intervalSec`). Sin él, un reinicio masivo de flota (corte eléctrico, actualización de Windows) hace que todos los agentes golpeen `/ingest` en el mismo segundo. | No | ✅ |
 
 #### Tier 2 — limpieza rápida (bajo esfuerzo, mismo sprint que el Tier 1)
 
@@ -489,12 +489,21 @@ README dice que significa. **Backend: No.**
 | **Rediseño del ring buffer.** El formato actual (JSONL de fichero único) reescribe el fichero entero en cada `Push`/`Pop` — O(n) por operación. Con el tope de 1000 ítems el peor caso está acotado, pero un corte de red de horas con un `intervalSec` bajo puede acercarse a ese tope y encadenar reescrituras cada vez más caras. Propuesta: log segmentado tipo WAL — ficheros `segment-NNNN.jsonl` de tamaño fijo (p. ej. 100 payloads); `Push` hace *append* O(1) al segmento activo, abriendo uno nuevo cuando se llena; `Pop` lee del segmento más antiguo y lo borra entero (también O(1)) cuando queda vacío; la eviction del ring borra el segmento más antiguo completo al superar el máximo. La interfaz pública (`Push`/`Pop`/`Len`) no cambia — `agent.go` no se entera del cambio de formato, es una mejora interna de encapsulación (SOLID: los consumidores dependen de la interfaz). Alternativa con menos código propio pero una dependencia nueva: `go.etcd.io/bbolt` como KV embebido con clave autoincremental. Empezar por el log segmentado antes de traer una dependencia nueva (LEAN). | No |
 | **Firma de releases + verificación de integridad** (cierra el pendiente de la Fase 3, §7). Del lado del agente, concretamente: (1) cada release publica `SHA256SUMS` y una firma (`minisign` o `cosign` keyless); (2) el agente embebe la clave pública de verificación (mismo mecanismo que `internal/icon` usa para embeber el mark de marca, aquí para una clave); (3) un subcomando `hygeia-agent verify <binario>` que un instalador o un operador ejecuta contra el checksum/firma publicados antes de sustituir el binario en producción. El MVP (verificar un binario ya descargado a mano desde GitHub Releases) **no toca el backend en absoluto**. Solo pasaría a tocarlo si más adelante se añade auto-update con un `GET /hygeia/agent/latest` que el agente consulte — eso es una decisión aparte, no un prerrequisito de esta. | No (Sí solo si se añade auto-update con consulta al backend) |
 
-### 12.3 Descartado en esta etapa
+### 12.3 Descartado o diferido en esta etapa
 
 - **Cgroup/container awareness** (límites efectivos de CPU/memoria dentro de un contenedor,
   en vez de los del host). Cambiaría el contrato de ingesta y presupone que Hygeia está
   pensado para correr containerizado, algo que no está decidido — queda fuera de la Etapa 2
-  hasta que ese alcance se confirme explícitamente.
+  hasta que ese alcance se confirme explícitamente. *(descartado)*
+- **Validar que `serverUrl` sea `https://`** (rechazar `http://` en `config.Load`, para que
+  el §5 "TLS obligatorio" no dependa solo de buena voluntad). Hoy no hay ninguna
+  comprobación de esquema — se descubrió durante la verificación en caliente del Tier 1,
+  contra un servidor de prueba en `http://127.0.0.1`, que el agente lo aceptó sin queja.
+  **Diferido, no descartado:** el entorno de desarrollo actual sirve el backend (SPA) detrás
+  de Vite, que no sirve con certificado — forzar `https://` ahora mismo rompería ese flujo
+  de desarrollo. Retomar cuando el entorno de dev tenga TLS (o, alternativa más barata:
+  permitir `http://` solo cuando el host sea `localhost`/`127.0.0.1`, y exigir `https://`
+  para cualquier otro). *(diferido)*
 
 ### 12.4 Para trasplantar al plan del backend
 

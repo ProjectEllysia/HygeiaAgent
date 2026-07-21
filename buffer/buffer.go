@@ -15,11 +15,17 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sync"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 )
 
+// RingBuffer es seguro para uso concurrente: el bucle principal del agente
+// llama a Push/Pop mientras el canal de control (§11.4) puede llamar a Len
+// desde otra goroutine en cualquier momento (agent.Status()). El mutex es
+// quien garantiza eso, no el caller.
 type RingBuffer struct {
+	mu       sync.Mutex
 	path     string
 	maxItems int
 }
@@ -90,6 +96,8 @@ func (b *RingBuffer) Push(p *payload.Payload) error {
 	if err != nil {
 		return err
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	lines, err := readLines(b.path)
 	if err != nil {
 		return err
@@ -105,6 +113,8 @@ func (b *RingBuffer) Push(p *payload.Payload) error {
 
 // Pop devuelve el payload más viejo y lo elimina. io.EOF = buffer vacío.
 func (b *RingBuffer) Pop() (*payload.Payload, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	lines, err := readLines(b.path)
 	if err != nil {
 		return nil, err
@@ -127,6 +137,8 @@ func (b *RingBuffer) Pop() (*payload.Payload, error) {
 
 // Len devuelve el número de payloads pendientes.
 func (b *RingBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	lines, _ := readLines(b.path)
 	return len(lines)
 }
