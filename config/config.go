@@ -10,6 +10,9 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+// maxIntervalSec acota intervalSec por arriba (24h) — ver Load.
+const maxIntervalSec = 86400
+
 // Config es la configuración del agente. Se carga de un fichero TOML
 // (config.toml) con override por variables de entorno. Cada campo del
 // fichero se mapea por nombre (ver config.example.toml).
@@ -87,6 +90,12 @@ func Load(path string) (*Config, error) {
 	}
 	if c.IntervalSec <= 0 {
 		c.IntervalSec = 15
+	}
+	// Tope defensivo: un typo tipo "intervalSec = 1500000" no debería dejar
+	// el agente mudo durante semanas (plan §12.2, Tier 2) — el activo
+	// dejaría de reportar y nadie lo notaría hasta mucho después.
+	if c.IntervalSec > maxIntervalSec {
+		c.IntervalSec = maxIntervalSec
 	}
 	if c.ServerURL == "" {
 		return nil, fmt.Errorf("config: serverUrl es obligatorio (fichero %q o HYGEIA_SERVER_URL)", path)

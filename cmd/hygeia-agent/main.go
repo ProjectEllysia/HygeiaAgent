@@ -18,13 +18,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/kardianos/service"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/agent"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/version"
 )
 
 // program implementa service.Interface: el SO llama a Start (que NO debe
@@ -33,26 +33,32 @@ type program struct {
 	log    *slog.Logger
 	agent  *agent.Agent
 	cancel context.CancelFunc
-	done   chan struct{}
+	// wg espera a AMBAS goroutines lanzadas en Start (bucle del agente y
+	// canal de control) antes de que Stop() devuelva. Antes solo se esperaba
+	// al bucle del agente — el servicio podía reportarse "parado" al SO con
+	// el pipe/socket del canal de control todavía cerrándose (plan §12.2,
+	// Tier 2).
+	wg sync.WaitGroup
 }
 
 func (p *program) Start(service.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
-	p.done = make(chan struct{})
 
 	// Canal de control: si no se puede abrir, el agente sigue funcionando
 	// perfectamente — el tray es opcional (§11.6) y no debe poder tumbar la
 	// monitorización.
 	srv := control.NewServer(p.log, p.agent.Status, p.agent.Enroll)
+
+	p.wg.Add(2)
 	go func() {
+		defer p.wg.Done()
 		if err := srv.Serve(ctx); err != nil {
 			p.log.Error("canal de control no disponible (el agente sigue)", "err", err)
 		}
 	}()
-
 	go func() {
-		defer close(p.done)
+		defer p.wg.Done()
 		p.agent.Run(ctx)
 	}()
 	return nil
@@ -62,9 +68,7 @@ func (p *program) Stop(service.Service) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
-	if p.done != nil {
-		<-p.done
-	}
+	p.wg.Wait()
 	return nil
 }
 
@@ -114,58 +118,6 @@ func main() {
 		os.Exit(1)
 	}
 }
-
-// runCommand despacha los subcomandos de gestión del servicio.
-func runCommand(svc service.Service, cmd string) error {
-	switch cmd {
-	case "install", "uninstall", "start", "stop", "restart":
-		if err := service.Control(svc, cmd); err != nil {
-			return fmt.Errorf("%s: %w (¿lo estás ejecutando como administrador/root?)", cmd, err)
-		}
-		fmt.Printf("hygeia-agent: %s completado\n", cmd)
-		return nil
-
-	case "status":
-		st, err := svc.Status()
-		if err != nil {
-			return fmt.Errorf("status: %w", err)
-		}
-		fmt.Printf("hygeia-agent: %s\n", statusName(st))
-		return nil
-
-	case "version", "-v", "--version":
-		fmt.Printf("hygeia-agent %s\n", version.Version)
-		return nil
-
-	case "help", "-h", "--help":
-		fmt.Print(usage)
-		return nil
-
-	default:
-		return fmt.Errorf("subcomando desconocido %q\n\n%s", cmd, usage)
-	}
-}
-
-func statusName(st service.Status) string {
-	switch st {
-	case service.StatusRunning:
-		return "en ejecución"
-	case service.StatusStopped:
-		return "parado"
-	default:
-		return "desconocido (¿no está instalado?)"
-	}
-}
-
-const usage = `Uso: hygeia-agent [subcomando]
-
-  (sin argumentos)  ejecuta el agente en primer plano
-  install           registra el servicio en el SO
-  uninstall         elimina el servicio
-  start | stop | restart
-  status            consulta el estado al gestor de servicios
-  version
-`
 
 // newLogger elige destino según cómo se arrancó. En terminal, stderr. Como
 // servicio no hay terminal a la que mirar, así que va a un fichero en el

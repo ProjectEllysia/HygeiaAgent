@@ -457,14 +457,14 @@ README dice que significa. **Backend: No.**
 
 #### Tier 2 — limpieza rápida (bajo esfuerzo, mismo sprint que el Tier 1)
 
-| Mejora | Backend |
-|---|---|
-| **`Stop()` no espera al canal de control.** En `cmd/hygeia-agent/main.go`, `program.Stop` cancela el contexto y espera `p.done` (el bucle del agente), pero la goroutine de `srv.Serve(ctx)` no tiene su propio `done` y nadie la espera — el servicio puede reportarse "parado" con el pipe/socket todavía cerrándose. Añadir un segundo canal y esperar ambos. | No |
-| **`processes.go` recrea el proceso tras ordenar.** `toProcessInfo` llama a `gpsproc.NewProcessWithContext(pid)` para leer el nombre de los top-N, en vez de reusar el `*process.Process` que ya se obtuvo en el primer paso (y que ya se sabe que existe) — una llamada redundante que revalida el PID. Guardar el puntero en `procSample` y llamar `.NameWithContext` directamente sobre él. | No |
-| **Eliminar `shipper.IngestResponse.NextInterval()`.** Cero llamadas en todo el repo (`agent.go` lee `resp.NextIntervalSec` directamente) — código muerto, violación de YAGNI/LEAN. | No |
-| **`disk.isPseudoMount` reimplementa `strings.HasPrefix` a mano** con aritmética de índices. Sustituir por `strings.HasPrefix(m.Mountpoint, p+"/")` — mismo comportamiento, sin la reimplementación. | No |
-| **Validación defensiva en `config.Load`:** tope superior a `intervalSec` (un typo tipo `1500000` no debería dejar el agente mudo un mes) y guardas `math.IsNaN`/`IsInf` en `round1` antes del cast a `int64` (hoy indefinido si algún colector llegara a pasar un valor no numérico). | No |
-| **Extraer el dispatcher de subcomandos** (`runCommand`, `statusName`, `usage`) de `cmd/hygeia-agent/main.go` a un fichero propio — `main.go` mezcla arranque del servicio con parsing de CLI; separarlo es una mejora de SRP de coste casi nulo. | No |
+| Mejora | Backend | Estado |
+|---|---|---|
+| **`Stop()` no espera al canal de control.** En `cmd/hygeia-agent/main.go`, `program.Stop` cancela el contexto y espera `p.done` (el bucle del agente), pero la goroutine de `srv.Serve(ctx)` no tiene su propio `done` y nadie la espera — el servicio puede reportarse "parado" con el pipe/socket todavía cerrándose. Añadir un segundo canal y esperar ambos. | No | ✅ |
+| **`processes.go` recrea el proceso tras ordenar.** `toProcessInfo` llama a `gpsproc.NewProcessWithContext(pid)` para leer el nombre de los top-N, en vez de reusar el `*process.Process` que ya se obtuvo en el primer paso (y que ya se sabe que existe) — una llamada redundante que revalida el PID. Guardar el puntero en `procSample` y llamar `.NameWithContext` directamente sobre él. | No | ✅ *(resuelto de paso al arreglar §12.1)* |
+| **Eliminar `shipper.IngestResponse.NextInterval()`.** Cero llamadas en todo el repo (`agent.go` lee `resp.NextIntervalSec` directamente) — código muerto, violación de YAGNI/LEAN. | No | ✅ |
+| **`disk.isPseudoMount` reimplementa `strings.HasPrefix` a mano** con aritmética de índices. Sustituir por `strings.HasPrefix(m.Mountpoint, p+"/")` — mismo comportamiento, sin la reimplementación. | No | ✅ |
+| **Validación defensiva en `config.Load`:** tope superior a `intervalSec` (un typo tipo `1500000` no debería dejar el agente mudo un mes) y guardas `math.IsNaN`/`IsInf` en `round1` antes del cast a `int64` (hoy indefinido si algún colector llegara a pasar un valor no numérico). | No | ✅ |
+| **Extraer el dispatcher de subcomandos** (`runCommand`, `statusName`, `usage`) de `cmd/hygeia-agent/main.go` a un fichero propio — `main.go` mezcla arranque del servicio con parsing de CLI; separarlo es una mejora de SRP de coste casi nulo. | No | ✅ |
 
 #### Tier 3 — alto impacto, esfuerzo medio (siguiente sprint)
 

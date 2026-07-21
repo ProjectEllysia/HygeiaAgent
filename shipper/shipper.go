@@ -43,10 +43,6 @@ type IngestResponse struct {
 	ServerTime      time.Time `json:"serverTime"`
 }
 
-// NextInterval devuelve el intervalo sugerido por el backend (0 = sin
-// cambio) que main usará para auto-ajustar el ticker sin re-desplegar.
-func (r *IngestResponse) NextInterval() int { return r.NextIntervalSec }
-
 // Send serializa el payload, lo gzip-comprime y hace POST al backend con
 // Authorization: Bearer <agentKey>. Reintenta con backoff exponencial.
 // Si todo falla, devuelve error para que el caller lo mande al buffer.

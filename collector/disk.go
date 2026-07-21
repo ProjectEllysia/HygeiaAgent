@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"strings"
 
 	gpsdisk "github.com/shirou/gopsutil/v4/disk"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
@@ -44,7 +45,7 @@ func isPseudoMount(m gpsdisk.PartitionStat) bool {
 		return true
 	}
 	for _, p := range []string{"/proc", "/sys", "/dev", "/run", "/var/lib/docker", "/snap"} {
-		if m.Mountpoint == p || len(m.Mountpoint) >= len(p)+1 && m.Mountpoint[:len(p)+1] == p+"/" {
+		if m.Mountpoint == p || strings.HasPrefix(m.Mountpoint, p+"/") {
 			return true
 		}
 	}

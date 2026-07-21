@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"math"
 	"time"
 
 	gpscpu "github.com/shirou/gopsutil/v4/cpu"
@@ -54,6 +55,12 @@ func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 
 func sampleInterval() time.Duration { return time.Second }
 
+// round1 redondea a 1 decimal. NaN/±Inf se devuelven como 0: el cast a
+// int64 de un valor no finito es indefinido en Go, y ningún colector
+// debería propagar un dato así al payload (plan §12.2, Tier 2).
 func round1(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
 	return float64(int64(v*10+0.5)) / 10
 }
