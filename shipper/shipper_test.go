@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -157,6 +158,67 @@ func TestSendRespectsContextCancellation(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("Send() tardó %v en devolver el control tras cancelar ctx — el backoff no lo está respetando", elapsed)
+	}
+}
+
+// Un status permanente (422/400/413) no debe reintentarse: el mismo
+// payload va a fallar siempre igual, así que Send debe devolver el control
+// en el primer intento en vez de gastar el backoff completo.
+func TestSendFailsFastOnPermanentStatus(t *testing.T) {
+	for _, code := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			var attempts atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.WriteHeader(code)
+			}))
+			defer srv.Close()
+
+			s := NewShipper(srv.URL, "k")
+			fastBackoff(s)
+
+			_, err := s.Send(context.Background(), testPayload())
+			if err == nil {
+				t.Fatal("Send() = nil, se esperaba PermanentError")
+			}
+			var permErr *PermanentError
+			if !errors.As(err, &permErr) {
+				t.Fatalf("Send() error = %v (%T), se esperaba *PermanentError", err, err)
+			}
+			if permErr.StatusCode != code {
+				t.Errorf("PermanentError.StatusCode = %d, se esperaba %d", permErr.StatusCode, code)
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Errorf("intentos = %d, se esperaba 1 (sin reintentos en error permanente)", got)
+			}
+		})
+	}
+}
+
+// 401 (clave inválida) NO es un PermanentError: el problema es la clave, no
+// el payload — tras un Reset+Enroll con clave correcta el mismo dato sí
+// podría entregarse, así que debe seguir tratándose como transitorio.
+func TestSendUnauthorizedIsNotPermanent(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(srv.URL, "k")
+	fastBackoff(s) // maxRetries = 2 => 3 intentos en total
+
+	_, err := s.Send(context.Background(), testPayload())
+	if err == nil {
+		t.Fatal("Send() = nil, se esperaba error")
+	}
+	var permErr *PermanentError
+	if errors.As(err, &permErr) {
+		t.Fatal("401 se clasificó como PermanentError, no debería")
+	}
+	if got := attempts.Load(); got != int32(s.maxRetries+1) {
+		t.Errorf("intentos = %d, se esperaban %d (401 sí reintenta)", got, s.maxRetries+1)
 	}
 }
 

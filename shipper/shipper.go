@@ -55,6 +55,36 @@ type IngestResponse struct {
 	ServerTime      time.Time `json:"serverTime"`
 }
 
+// PermanentError indica que el backend rechazó el PAYLOAD en sí (esquema
+// inválido, reloj fuera de ventana, cuerpo demasiado grande) — no que esté
+// caído o sobrecargado. Reintentar exactamente el mismo payload nunca va a
+// tener éxito: el dato ya está recolectado y no puede cambiar. El caller
+// (agent.drainBuffer) usa esto para descartarlo en vez de reencolarlo para
+// siempre, que es justo el bug que motivó este tipo (un payload envejecido
+// más allá de la ventana de reloj del backend quedaba dando vueltas en el
+// buffer indefinidamente).
+type PermanentError struct {
+	StatusCode int
+}
+
+func (e *PermanentError) Error() string {
+	return fmt.Sprintf("shipper: backend rechazó el payload de forma permanente (status %d)", e.StatusCode)
+}
+
+// isPermanentStatus identifica los códigos donde el problema es el propio
+// cuerpo de la petición, no la disponibilidad del backend. 401 (clave
+// inválida) queda fuera a propósito: no es el payload lo que falla, y tras
+// un Reset+Enroll con una clave correcta el mismo payload sí podría
+// entregarse — por eso sigue tratándose como transitorio (§7, agent.Reset).
+func isPermanentStatus(code int) bool {
+	switch code {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
+}
+
 // Send serializa el payload, lo gzip-comprime y hace POST al backend con
 // Authorization: Bearer <agentKey>. Reintenta con backoff exponencial.
 // Si todo falla, devuelve error para que el caller lo mande al buffer.
@@ -103,6 +133,11 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 				return r, nil
 			}
 			resp.Body.Close()
+			if isPermanentStatus(resp.StatusCode) {
+				// Sin reintentos: el status ya dice que el payload nunca
+				// va a pasar, reintentar solo gasta el backoff para nada.
+				return nil, &PermanentError{StatusCode: resp.StatusCode}
+			}
 			lastErr = fmt.Errorf("shipper: backend devolvió status %d", resp.StatusCode)
 		}
 
