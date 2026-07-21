@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 )
 
@@ -17,18 +18,25 @@ type StatusFunc func() Status
 // no acepta el enrollment (p. ej. ya está configurado, §11.7).
 type EnrollFunc func(agentKey string) error
 
+// RecentLogFunc devuelve las últimas líneas de log en memoria del proceso,
+// para incluirlas en GET /debug. Puede ser nil — entonces /debug simplemente
+// no trae RecentLog (plan §12.2, Tier 3).
+type RecentLogFunc func() []string
+
 // Server expone el canal de control sobre el transporte local del SO.
 type Server struct {
-	log      *slog.Logger
-	status   StatusFunc
-	enroll   EnrollFunc
-	listener net.Listener
-	http     *http.Server
+	log       *slog.Logger
+	status    StatusFunc
+	enroll    EnrollFunc
+	recentLog RecentLogFunc
+	listener  net.Listener
+	http      *http.Server
 }
 
-// NewServer crea el servidor. No escucha hasta llamar a Serve.
-func NewServer(log *slog.Logger, status StatusFunc, enroll EnrollFunc) *Server {
-	return &Server{log: log, status: status, enroll: enroll}
+// NewServer crea el servidor. No escucha hasta llamar a Serve. recentLog
+// puede ser nil.
+func NewServer(log *slog.Logger, status StatusFunc, enroll EnrollFunc, recentLog RecentLogFunc) *Server {
+	return &Server{log: log, status: status, enroll: enroll, recentLog: recentLog}
 }
 
 // Serve abre el transporte local y atiende peticiones hasta que ctx se
@@ -43,6 +51,7 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
+	mux.HandleFunc("GET /debug", s.handleDebug)
 	mux.HandleFunc("POST /enroll", s.handleEnroll)
 
 	s.http = &http.Server{
@@ -68,6 +77,27 @@ func (s *Server) Serve(ctx context.Context) error {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.status())
+}
+
+// handleDebug atiende GET /debug (plan §12.2, Tier 3). Diagnóstico del
+// propio proceso hygeia-agent — no de las métricas que recolecta ni del
+// host — pensado para que un operador (o un futuro `hygeia-agent debug`)
+// pueda ver goroutines/memoria/últimas líneas de log sin buscar el fichero
+// de log a mano.
+func (s *Server) handleDebug(w http.ResponseWriter, r *http.Request) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	info := DebugInfo{
+		Goroutines: runtime.NumGoroutine(),
+		AllocBytes: mem.Alloc,
+		SysBytes:   mem.Sys,
+		NumGC:      mem.NumGC,
+	}
+	if s.recentLog != nil {
+		info.RecentLog = s.recentLog()
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {

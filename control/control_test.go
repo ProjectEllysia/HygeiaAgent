@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -44,9 +45,14 @@ func TestValidateAgentKey(t *testing.T) {
 // (named pipe / socket Unix) y devuelve un cliente conectado a él.
 func newTestServer(t *testing.T, status StatusFunc, enroll EnrollFunc) *Client {
 	t.Helper()
+	return newTestServerWithLog(t, status, enroll, nil)
+}
+
+func newTestServerWithLog(t *testing.T, status StatusFunc, enroll EnrollFunc, recentLog RecentLogFunc) *Client {
+	t.Helper()
 	isolate(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(log, status, enroll)
+	srv := NewServer(log, status, enroll, recentLog)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -145,5 +151,44 @@ func TestEnrollPropagatesServiceError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ya está dado de alta") {
 		t.Errorf("Enroll() error = %q, no propaga el mensaje del servicio", err)
+	}
+}
+
+// GET /debug (plan §12.2, Tier 3): goroutines/memoria vienen del propio
+// proceso del test (runtime.NumGoroutine siempre > 0), y RecentLog viene de
+// la función inyectada.
+func TestDebugRoundTrip(t *testing.T) {
+	client := newTestServerWithLog(t,
+		func() Status { return Status{State: StateConnected} },
+		func(string) error { return nil },
+		func() []string { return []string{"línea vieja", "línea reciente"} },
+	)
+
+	got, err := client.Debug(context.Background())
+	if err != nil {
+		t.Fatalf("Debug() error = %v", err)
+	}
+	if got.Goroutines <= 0 {
+		t.Errorf("Goroutines = %d, se esperaba > 0", got.Goroutines)
+	}
+	want := []string{"línea vieja", "línea reciente"}
+	if !reflect.DeepEqual(got.RecentLog, want) {
+		t.Errorf("RecentLog = %v, se esperaba %v", got.RecentLog, want)
+	}
+}
+
+// Sin RecentLogFunc (nil), /debug no debe fallar — solo no trae RecentLog.
+func TestDebugWithoutRecentLogFunc(t *testing.T) {
+	client := newTestServer(t,
+		func() Status { return Status{State: StateConnected} },
+		func(string) error { return nil },
+	)
+
+	got, err := client.Debug(context.Background())
+	if err != nil {
+		t.Fatalf("Debug() error = %v", err)
+	}
+	if len(got.RecentLog) != 0 {
+		t.Errorf("RecentLog = %v, se esperaba vacío sin RecentLogFunc", got.RecentLog)
 	}
 }

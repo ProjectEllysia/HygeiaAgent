@@ -26,25 +26,44 @@ func NewClient() *Client {
 	}
 }
 
-// Status pide el estado actual al servicio (GET /status).
-func (c *Client) Status(ctx context.Context) (*Status, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://hygeia/status", nil)
+// getJSON hace GET a `path` sobre el canal de control y decodifica la
+// respuesta en `out`. Status y Debug comparten este mismo patrón.
+func (c *Client) getJSON(ctx context.Context, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://hygeia"+path, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
+		return fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("control: /status devolvió %d", resp.StatusCode)
+		return fmt.Errorf("control: %s devolvió %d", path, resp.StatusCode)
 	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("control: decodificando %s: %w", path, err)
+	}
+	return nil
+}
+
+// Status pide el estado actual al servicio (GET /status).
+func (c *Client) Status(ctx context.Context) (*Status, error) {
 	var s Status
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
-		return nil, fmt.Errorf("control: decodificando /status: %w", err)
+	if err := c.getJSON(ctx, "/status", &s); err != nil {
+		return nil, err
 	}
 	return &s, nil
+}
+
+// Debug pide el diagnóstico interno del proceso (GET /debug, plan §12.2
+// Tier 3): goroutines, memoria y últimas líneas de log.
+func (c *Client) Debug(ctx context.Context) (*DebugInfo, error) {
+	var d DebugInfo
+	if err := c.getJSON(ctx, "/debug", &d); err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 // Enroll envía la clave de agente al servicio (POST /enroll). La valida

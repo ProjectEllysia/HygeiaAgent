@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/kardianos/service"
 
+	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/version"
 )
 
@@ -26,6 +29,9 @@ func runCommand(svc service.Service, cmd string) error {
 		fmt.Printf("hygeia-agent: %s\n", statusName(st))
 		return nil
 
+	case "debug":
+		return runDebug()
+
 	case "version", "-v", "--version":
 		fmt.Printf("hygeia-agent %s\n", version.Version)
 		return nil
@@ -37,6 +43,33 @@ func runCommand(svc service.Service, cmd string) error {
 	default:
 		return fmt.Errorf("subcomando desconocido %q\n\n%s", cmd, usage)
 	}
+}
+
+// runDebug se conecta al canal de control de un servicio YA EN MARCHA y
+// vuelca su GET /debug (plan §12.2, Tier 3) — diagnóstico de campo sin
+// depender de encontrar el fichero de log.
+func runDebug() error {
+	client := control.NewClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	info, err := client.Debug(ctx)
+	if err != nil {
+		return fmt.Errorf("debug: %w (¿está el servicio en marcha?)", err)
+	}
+
+	fmt.Printf("goroutines: %d\n", info.Goroutines)
+	fmt.Printf("memoria:    alloc=%d KB  sys=%d KB  numGC=%d\n",
+		info.AllocBytes/1024, info.SysBytes/1024, info.NumGC)
+	if len(info.RecentLog) == 0 {
+		fmt.Println("log reciente: (vacío)")
+		return nil
+	}
+	fmt.Println("log reciente:")
+	for _, line := range info.RecentLog {
+		fmt.Println("  " + line)
+	}
+	return nil
 }
 
 func statusName(st service.Status) string {
@@ -57,5 +90,6 @@ const usage = `Uso: hygeia-agent [subcomando]
   uninstall         elimina el servicio
   start | stop | restart
   status            consulta el estado al gestor de servicios
+  debug             diagnóstico del proceso en marcha (goroutines, memoria, log reciente)
   version
 `

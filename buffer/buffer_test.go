@@ -1,7 +1,9 @@
 package buffer
 
 import (
+	"encoding/json"
 	"io"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -63,6 +65,54 @@ func TestPushEvictsOldestWhenFull(t *testing.T) {
 	}
 	if p.AgentVersion != "b" {
 		t.Errorf("Pop() tras eviction = %q, se esperaba \"b\" (\"a\" fue descartado)", p.AgentVersion)
+	}
+}
+
+// Una línea corrupta (fichero manipulado externamente, escritura a medias
+// tras un corte de luz) no debe dejar el buffer trabado para siempre: Pop la
+// descarta y reporta el error, dejando el resto del buffer intacto y
+// accesible en la siguiente llamada.
+func TestPopRecoversFromCorruptedLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "buffer.jsonl")
+	b := NewRingBuffer(path, 10)
+
+	good, err := json.Marshal(newTestPayload("valida"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fichero escrito a mano: una línea corrupta seguida de una válida.
+	content := "{esto no es json valido\n" + string(good) + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := b.Pop(); err == nil {
+		t.Fatal("Pop() sobre la línea corrupta = nil, se esperaba un error de decodificación")
+	}
+
+	p, err := b.Pop()
+	if err != nil {
+		t.Fatalf("Pop() tras descartar la corrupta: %v", err)
+	}
+	if p.AgentVersion != "valida" {
+		t.Errorf("Pop() = %q, se esperaba \"valida\" (la línea buena tras la corrupta)", p.AgentVersion)
+	}
+	if _, err := b.Pop(); err != io.EOF {
+		t.Errorf("Pop() tras vaciar = %v, se esperaba io.EOF", err)
+	}
+}
+
+// Un fichero de buffer que no existe todavía (primer arranque del agente)
+// no es un error: el buffer se comporta como si estuviera vacío.
+func TestBufferToleratesMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "no-existe-todavia.jsonl")
+	b := NewRingBuffer(path, 10)
+
+	if got := b.Len(); got != 0 {
+		t.Errorf("Len() sobre fichero inexistente = %d, se esperaba 0", got)
+	}
+	if _, err := b.Pop(); err != io.EOF {
+		t.Errorf("Pop() sobre fichero inexistente = %v, se esperaba io.EOF", err)
 	}
 }
 

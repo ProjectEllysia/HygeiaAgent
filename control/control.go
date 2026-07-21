@@ -9,8 +9,12 @@
 // que el servidor es un http.Server y el cliente un http.Client con un
 // DialContext propio.
 //
-// Superficie deliberadamente mínima (§11.7): GET /status + POST /enroll.
-// Nada de métricas, nada de parar/arrancar el servicio.
+// Superficie deliberadamente mínima (§11.7): GET /status, GET /debug y
+// POST /enroll. Nada de métricas de negocio, nada de parar/arrancar el
+// servicio. GET /debug (plan §12.2, Tier 3) es diagnóstico del PROCESO
+// hygeia-agent en sí (goroutines, memoria, últimas líneas de log) — no
+// expone nada del host ni de los activos monitorizados, así que hereda la
+// misma superficie mínima sin ampliarla de verdad.
 package control
 
 import (
@@ -42,6 +46,17 @@ type Status struct {
 	Hostname     string    `json:"hostname,omitempty"`
 	ServerURL    string    `json:"serverUrl,omitempty"`
 	LastError    string    `json:"lastError,omitempty"`
+}
+
+// DebugInfo es la respuesta de GET /debug: estado interno del proceso
+// hygeia-agent para diagnóstico de campo, sin depender de encontrar el
+// fichero de log (plan §12.2, Tier 3).
+type DebugInfo struct {
+	Goroutines int      `json:"goroutines"`
+	AllocBytes uint64   `json:"allocBytes"`
+	SysBytes   uint64   `json:"sysBytes"`
+	NumGC      uint32   `json:"numGC"`
+	RecentLog  []string `json:"recentLog,omitempty"`
 }
 
 // EnrollRequest es el cuerpo de POST /enroll.
