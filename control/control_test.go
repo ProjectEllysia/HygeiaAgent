@@ -45,14 +45,19 @@ func TestValidateAgentKey(t *testing.T) {
 // (named pipe / socket Unix) y devuelve un cliente conectado a él.
 func newTestServer(t *testing.T, status StatusFunc, enroll EnrollFunc) *Client {
 	t.Helper()
-	return newTestServerWithLog(t, status, enroll, nil)
+	return newTestServerWithReset(t, status, enroll, func() error { return nil })
 }
 
-func newTestServerWithLog(t *testing.T, status StatusFunc, enroll EnrollFunc, recentLog RecentLogFunc) *Client {
+func newTestServerWithReset(t *testing.T, status StatusFunc, enroll EnrollFunc, reset ResetFunc) *Client {
+	t.Helper()
+	return newTestServerWithLog(t, status, enroll, reset, nil)
+}
+
+func newTestServerWithLog(t *testing.T, status StatusFunc, enroll EnrollFunc, reset ResetFunc, recentLog RecentLogFunc) *Client {
 	t.Helper()
 	isolate(t)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := NewServer(log, status, enroll, recentLog)
+	srv := NewServer(log, status, enroll, reset, recentLog)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -154,6 +159,40 @@ func TestEnrollPropagatesServiceError(t *testing.T) {
 	}
 }
 
+func TestResetHappyPath(t *testing.T) {
+	called := false
+	client := newTestServerWithReset(t,
+		func() Status { return Status{State: StateConnected} },
+		func(string) error { return nil },
+		func() error { called = true; return nil },
+	)
+
+	if err := client.Reset(context.Background()); err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	if !called {
+		t.Error("el reset no se ejecutó")
+	}
+}
+
+// El error del servicio (p. ej. "ya está sin configurar") debe llegar al
+// tray con su texto, igual que TestEnrollPropagatesServiceError.
+func TestResetPropagatesServiceError(t *testing.T) {
+	client := newTestServerWithReset(t,
+		func() Status { return Status{State: StateUnconfigured} },
+		func(string) error { return nil },
+		func() error { return errors.New("el agente ya está sin configurar") },
+	)
+
+	err := client.Reset(context.Background())
+	if err == nil {
+		t.Fatal("Reset() = nil, se esperaba error del servicio")
+	}
+	if !strings.Contains(err.Error(), "ya está sin configurar") {
+		t.Errorf("Reset() error = %q, no propaga el mensaje del servicio", err)
+	}
+}
+
 // GET /debug (plan §12.2, Tier 3): goroutines/memoria vienen del propio
 // proceso del test (runtime.NumGoroutine siempre > 0), y RecentLog viene de
 // la función inyectada.
@@ -161,6 +200,7 @@ func TestDebugRoundTrip(t *testing.T) {
 	client := newTestServerWithLog(t,
 		func() Status { return Status{State: StateConnected} },
 		func(string) error { return nil },
+		func() error { return nil },
 		func() []string { return []string{"línea vieja", "línea reciente"} },
 	)
 

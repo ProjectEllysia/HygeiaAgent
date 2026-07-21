@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -109,6 +110,34 @@ func (a *Agent) Enroll(agentKey string) error {
 	return nil
 }
 
+// Reset borra la clave de agente y vuelve a "sin configurar" — el
+// complemento simétrico de Enroll, para cuando la clave guardada es
+// inválida (revocada, mal copiada) y el agente se queda mudo sin ni
+// siquiera ofrecer el enrollment, porque desde su punto de vista ya está
+// "configurado" (Enroll la rechazaría). A diferencia de Enroll, Reset SÍ
+// actúa sobre un agente ya configurado — es justo su propósito — pero solo
+// borra la clave LOCAL: nunca la revoca en el backend, esa autoridad sigue
+// siendo del servidor (§1).
+func (a *Agent) Reset() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.cfg.IsConfigured() {
+		return fmt.Errorf("el agente ya está sin configurar")
+	}
+
+	previous := a.cfg.AgentKey
+	a.cfg.AgentKey = ""
+	if err := a.cfg.Save(); err != nil {
+		a.cfg.AgentKey = previous
+		return fmt.Errorf("no se pudo guardar el reset: %w", err)
+	}
+
+	a.shp = nil
+	a.state = control.StateUnconfigured
+	a.lastError = ""
+	return nil
+}
+
 // Run ejecuta el bucle principal hasta que ctx se cancele.
 func (a *Agent) Run(ctx context.Context) {
 	interval := time.Duration(a.cfg.IntervalSec) * time.Second
@@ -193,9 +222,18 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 
 	resp, err := shp.Send(ctx, p)
 	if err != nil {
-		a.log.Warn("envío fallido, guardando en buffer", "err", err)
-		if perr := a.buf.Push(p); perr != nil {
-			a.log.Error("no se pudo guardar en buffer", "err", perr)
+		var permErr *shipper.PermanentError
+		if errors.As(err, &permErr) {
+			// El backend rechazó ESTE payload (esquema, reloj, tamaño), no
+			// que esté caído: guardarlo en el buffer solo garantizaría que
+			// vuelva a fallar exactamente igual más tarde, ocupando un
+			// slot para siempre (el bug que motivó este tipo de error).
+			a.log.Warn("envío rechazado de forma permanente, descartando payload", "err", err)
+		} else {
+			a.log.Warn("envío fallido, guardando en buffer", "err", err)
+			if perr := a.buf.Push(p); perr != nil {
+				a.log.Error("no se pudo guardar en buffer", "err", perr)
+			}
 		}
 		a.setState(control.StateLocalError, err)
 		return 0
@@ -230,8 +268,13 @@ func (a *Agent) markPush() {
 func (a *Agent) collectPayload(ctx context.Context) *payload.Payload {
 	p := &payload.Payload{
 		AgentVersion: version.Version,
-		CollectedAt:  time.Now().UTC(),
-		Host:         collector.Host(),
+		// Truncado a microsegundo: time.Time serializa con precisión de
+		// nanosegundo variable (a veces 7-9 dígitos decimales), y el
+		// backend rechaza con 422 cualquier collectedAt que no tenga como
+		// máximo 6 — un heartbeat podía fallar solo por cómo cayera el
+		// reloj, sin relación con si el dato era válido o no.
+		CollectedAt: time.Now().UTC().Truncate(time.Microsecond),
+		Host:        collector.Host(),
 	}
 
 	var wg sync.WaitGroup
@@ -258,6 +301,16 @@ func (a *Agent) drainBuffer(ctx context.Context, shp *shipper.Shipper) {
 			return
 		}
 		if _, err := shp.Send(ctx, p); err != nil {
+			var permErr *shipper.PermanentError
+			if errors.As(err, &permErr) {
+				// Este payload en concreto nunca va a pasar (esquema, reloj
+				// caducado, tamaño) — descartarlo y seguir con el resto de
+				// la cola, no reencolarlo para que dé vueltas para siempre
+				// (el bug real: 9 payloads de horas de antigüedad atascados
+				// sin bajar nunca del buffer).
+				a.log.Warn("payload en buffer rechazado de forma permanente, descartando", "err", err)
+				continue
+			}
 			a.log.Warn("drenado interrumpido, reintentará más tarde", "err", err)
 			// devolver el payload al buffer para no perderlo: reintento en el
 			// próximo ciclo exitoso.

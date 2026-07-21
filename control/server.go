@@ -18,6 +18,11 @@ type StatusFunc func() Status
 // no acepta el enrollment (p. ej. ya está configurado, §11.7).
 type EnrollFunc func(agentKey string) error
 
+// ResetFunc limpia la clave de agente y devuelve el servicio a "sin
+// configurar". Devuelve error si el servicio no acepta el reset (p. ej. ya
+// estaba sin configurar).
+type ResetFunc func() error
+
 // RecentLogFunc devuelve las últimas líneas de log en memoria del proceso,
 // para incluirlas en GET /debug. Puede ser nil — entonces /debug simplemente
 // no trae RecentLog (plan §12.2, Tier 3).
@@ -28,6 +33,7 @@ type Server struct {
 	log       *slog.Logger
 	status    StatusFunc
 	enroll    EnrollFunc
+	reset     ResetFunc
 	recentLog RecentLogFunc
 	listener  net.Listener
 	http      *http.Server
@@ -35,8 +41,8 @@ type Server struct {
 
 // NewServer crea el servidor. No escucha hasta llamar a Serve. recentLog
 // puede ser nil.
-func NewServer(log *slog.Logger, status StatusFunc, enroll EnrollFunc, recentLog RecentLogFunc) *Server {
-	return &Server{log: log, status: status, enroll: enroll, recentLog: recentLog}
+func NewServer(log *slog.Logger, status StatusFunc, enroll EnrollFunc, reset ResetFunc, recentLog RecentLogFunc) *Server {
+	return &Server{log: log, status: status, enroll: enroll, reset: reset, recentLog: recentLog}
 }
 
 // Serve abre el transporte local y atiende peticiones hasta que ctx se
@@ -53,6 +59,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("GET /debug", s.handleDebug)
 	mux.HandleFunc("POST /enroll", s.handleEnroll)
+	mux.HandleFunc("POST /reset", s.handleReset)
 
 	s.http = &http.Server{
 		Handler:           mux,
@@ -122,6 +129,21 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("enrollment aceptado, agente configurado")
 	writeJSON(w, http.StatusOK, EnrollResponse{OK: true})
+}
+
+// handleReset atiende POST /reset: complemento simétrico de /enroll. Sin
+// cuerpo — a diferencia del enrollment, no hay nada que el cliente deba
+// enviar, solo la orden de borrar la clave local y volver a "sin
+// configurar" (nunca revoca nada en el backend, eso sigue siendo autoridad
+// del servidor).
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
+	if err := s.reset(); err != nil {
+		s.log.Warn("reset rechazado", "err", err)
+		writeJSON(w, http.StatusConflict, ResetResponse{Error: err.Error()})
+		return
+	}
+	s.log.Info("configuración reseteada, agente sin configurar")
+	writeJSON(w, http.StatusOK, ResetResponse{OK: true})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

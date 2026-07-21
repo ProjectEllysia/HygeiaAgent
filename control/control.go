@@ -9,12 +9,16 @@
 // que el servidor es un http.Server y el cliente un http.Client con un
 // DialContext propio.
 //
-// Superficie deliberadamente mínima (§11.7): GET /status, GET /debug y
-// POST /enroll. Nada de métricas de negocio, nada de parar/arrancar el
-// servicio. GET /debug (plan §12.2, Tier 3) es diagnóstico del PROCESO
-// hygeia-agent en sí (goroutines, memoria, últimas líneas de log) — no
-// expone nada del host ni de los activos monitorizados, así que hereda la
-// misma superficie mínima sin ampliarla de verdad.
+// Superficie deliberadamente mínima (§11.7): GET /status, GET /debug,
+// POST /enroll y POST /reset. Nada de métricas de negocio, nada de
+// parar/arrancar el servicio. GET /debug (plan §12.2, Tier 3) es
+// diagnóstico del PROCESO hygeia-agent en sí (goroutines, memoria, últimas
+// líneas de log) — no expone nada del host ni de los activos
+// monitorizados, así que hereda la misma superficie mínima sin ampliarla
+// de verdad. POST /reset es el complemento simétrico de POST /enroll: borra
+// la clave local (nunca la revoca en el backend) para que un cliente con
+// una clave inválida o mal copiada pueda volver a darse de alta desde el
+// tray, sin editar la config a mano.
 package control
 
 import (
@@ -66,6 +70,12 @@ type EnrollRequest struct {
 
 // EnrollResponse es la respuesta de POST /enroll.
 type EnrollResponse struct {
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// ResetResponse es la respuesta de POST /reset.
+type ResetResponse struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
 }

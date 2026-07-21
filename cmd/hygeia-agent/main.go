@@ -52,7 +52,7 @@ func (p *program) Start(service.Service) error {
 	// Canal de control: si no se puede abrir, el agente sigue funcionando
 	// perfectamente — el tray es opcional (§11.6) y no debe poder tumbar la
 	// monitorización.
-	srv := control.NewServer(p.log, p.agent.Status, p.agent.Enroll, p.recentLog)
+	srv := control.NewServer(p.log, p.agent.Status, p.agent.Enroll, p.agent.Reset, p.recentLog)
 
 	p.wg.Add(2)
 	go func() {

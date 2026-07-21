@@ -1,15 +1,21 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 )
 
 const testKey = "abcd1234.0123456789abcdef"
@@ -117,5 +123,131 @@ func TestEnrollRejectsMalformedKey(t *testing.T) {
 	}
 	if reloaded.AgentKey != "" {
 		t.Errorf("se persistió una clave malformada: %q", reloaded.AgentKey)
+	}
+}
+
+// Reset borra la clave y persiste el cambio: al recargar la config no debe
+// quedar rastro de ella (§5 — nunca en logs, y tampoco superviviente en
+// disco tras un reset explícito).
+func TestResetClearsKey(t *testing.T) {
+	a, cfgPath := newTestAgent(t, testKey)
+
+	if err := a.Reset(); err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	if got := a.Status().State; got != control.StateUnconfigured {
+		t.Errorf("tras Reset, State = %q, se esperaba %q", got, control.StateUnconfigured)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("recargando config: %v", err)
+	}
+	if reloaded.AgentKey != "" {
+		t.Errorf("clave tras reset = %q, se esperaba vacía", reloaded.AgentKey)
+	}
+}
+
+// Tras Reset, el agente vuelve a aceptar un Enroll (es justo el punto:
+// habilitar volver a dar de alta sin tocar la config a mano).
+func TestEnrollAfterReset(t *testing.T) {
+	a, cfgPath := newTestAgent(t, testKey)
+
+	if err := a.Reset(); err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+
+	const newKey = "wxyz9999.fedcba9876543210"
+	if err := a.Enroll(newKey); err != nil {
+		t.Fatalf("Enroll() tras Reset, error = %v", err)
+	}
+	if got := a.Status().State; got != control.StateStarting {
+		t.Errorf("tras Enroll post-reset, State = %q, se esperaba %q", got, control.StateStarting)
+	}
+
+	reloaded, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.AgentKey != newKey {
+		t.Errorf("clave persistida = %q, se esperaba %q", reloaded.AgentKey, newKey)
+	}
+}
+
+// Simétrico a TestEnrollRejectedWhenAlreadyConfigured: no tiene sentido
+// resetear un agente que ya está sin configurar, y silenciarlo escondería
+// un bug de estado en el caller (tray o test).
+func TestResetRejectedWhenUnconfigured(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+
+	err := a.Reset()
+	if err == nil {
+		t.Fatal("Reset() sobre agente sin configurar = nil, se esperaba rechazo")
+	}
+	if !strings.Contains(err.Error(), "ya está sin configurar") {
+		t.Errorf("error = %q, no explica el motivo del rechazo", err)
+	}
+}
+
+// time.Time serializa con precisión de nanosegundo variable (a veces 7-9
+// dígitos decimales) — el backend rechazaba con 422 cualquier collectedAt
+// con más de 6, sin relación con la validez del dato (bug real detectado en
+// producción, no reproducible de forma determinista sin este truncado).
+func TestCollectPayloadTruncatesCollectedAtToMicroseconds(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	p := a.collectPayload(context.Background())
+
+	data, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	// El grupo de fracción es opcional: si el truncado cae justo en un
+	// microsegundo múltiplo de 10^6 (raro, pero posible), el segundo sale
+	// sin punto decimal — eso también es válido, no un fallo del test.
+	re := regexp.MustCompile(`"collectedAt":"[^".]*(\.(\d+))?Z"`)
+	m := re.FindSubmatch(data)
+	if m == nil {
+		t.Fatal("no se encontró collectedAt en el payload")
+	}
+	if len(m[2]) > 6 {
+		t.Errorf("collectedAt tiene %d dígitos decimales, se esperaban ≤6: %s", len(m[2]), m[2])
+	}
+}
+
+// drainBuffer debe descartar (no reencolar) un payload que el backend
+// rechaza de forma permanente — si no, queda dando vueltas en el buffer sin
+// poder entregarse nunca (bug real: payloads de horas de antigüedad
+// atascados en producción, ver shipper.PermanentError).
+func TestDrainBufferDropsPermanentlyRejectedPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	body := "serverUrl = \"" + srv.URL + "\"\nagentKey = \"" + testKey + "\"\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HYGEIA_DATA_DIR", dir)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	a := New(log, cfg)
+
+	if err := a.buf.Push(&payload.Payload{AgentVersion: "test"}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if got := a.buf.Len(); got != 1 {
+		t.Fatalf("buf.Len() antes de drenar = %d, se esperaba 1", got)
+	}
+
+	a.drainBuffer(context.Background(), a.shp)
+
+	if got := a.buf.Len(); got != 0 {
+		t.Errorf("buf.Len() tras drenar un rechazo permanente = %d, se esperaba 0 (descartado, no reencolado)", got)
 	}
 }

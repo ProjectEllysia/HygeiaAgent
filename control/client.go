@@ -102,3 +102,30 @@ func (c *Client) Enroll(ctx context.Context, agentKey string) error {
 	}
 	return nil
 }
+
+// Reset pide al servicio que borre su clave de agente y vuelva a "sin
+// configurar" (POST /reset) — para cuando la clave configurada es inválida
+// o se quiere dar de alta el activo de nuevo, sin editar la config a mano.
+func (c *Client) Reset(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://hygeia/reset", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var rr ResetResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
+		return fmt.Errorf("control: respuesta ilegible del servicio (status %d)", resp.StatusCode)
+	}
+	if !rr.OK {
+		if rr.Error == "" {
+			rr.Error = fmt.Sprintf("el servicio rechazó el reset (status %d)", resp.StatusCode)
+		}
+		return fmt.Errorf("%s", rr.Error)
+	}
+	return nil
+}

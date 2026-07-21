@@ -44,6 +44,7 @@ type menu struct {
 	buffer     *systray.MenuItem
 	host       *systray.MenuItem
 	enroll     *systray.MenuItem
+	reset      *systray.MenuItem
 	lastPushAt time.Time // último valor conocido, para el retick de 1s sin volver a sondear
 }
 
@@ -127,6 +128,8 @@ func onReady() {
 	systray.AddSeparator()
 	m.enroll = systray.AddMenuItem("Introducir clave de agente…", "Dar de alta este activo")
 	m.enroll.Hide()
+	m.reset = systray.AddMenuItem("Reestablecer configuración…", "Borra la clave guardada para volver a dar de alta el activo")
+	m.reset.Hide()
 
 	startup := systray.AddMenuItemCheckbox("Arrancar con la sesión", "Abrir este icono al iniciar sesión", autostartEnabled())
 	systray.AddMenuItem(fmt.Sprintf("Versión %s", version.Version), "").Disable()
@@ -150,6 +153,8 @@ func onReady() {
 				}
 			case <-m.enroll.ClickedCh:
 				promptEnroll(client, m)
+			case <-m.reset.ClickedCh:
+				promptReset(client, m)
 			case <-startup.ClickedCh:
 				toggleAutostart(startup)
 			case <-quit.ClickedCh:
@@ -213,6 +218,7 @@ func refresh(client *control.Client, m *menu) {
 		m.buffer.SetTitle("Buffer: —")
 		m.host.SetTitle("Host: —")
 		m.enroll.Hide()
+		m.reset.Hide()
 		return
 	}
 
@@ -231,11 +237,16 @@ func refresh(client *control.Client, m *menu) {
 
 	// La opción de enrollment solo aparece cuando hace falta: el servicio
 	// rechaza reconfigurar un agente ya dado de alta (§11.7), así que
-	// ofrecerla siempre sería ofrecer algo que va a fallar.
+	// ofrecerla siempre sería ofrecer algo que va a fallar. "Reestablecer"
+	// es su complemento exacto: solo tiene sentido cuando SÍ hay algo que
+	// borrar (p. ej. una clave inválida que deja el agente en rojo sin ni
+	// siquiera ofrecer el enrollment, porque cree que ya está configurado).
 	if st.State == control.StateUnconfigured {
 		m.enroll.Show()
+		m.reset.Hide()
 	} else {
 		m.enroll.Hide()
+		m.reset.Show()
 	}
 }
 
@@ -271,6 +282,46 @@ func promptEnroll(client *control.Client, m *menu) {
 
 	_ = zenity.Info(
 		"Activo dado de alta. El agente empezará a enviar métricas en el próximo ciclo.",
+		zenity.Title("Hygeia"),
+		zenity.InfoIcon,
+	)
+	refresh(client, m)
+}
+
+// promptReset pide confirmación antes de borrar la clave guardada (§11.7):
+// es el rescate para el caso que motivó esta función — una clave inválida
+// (revocada, mal copiada) deja al agente en rojo sin ofrecer "Introducir
+// clave" porque, desde su punto de vista, ya está configurado. Solo borra
+// la clave LOCAL; no revoca nada en el backend.
+func promptReset(client *control.Client, m *menu) {
+	err := zenity.Question(
+		"Esto borra la clave de agente guardada y detiene el envío de\n"+
+			"métricas hasta que introduzcas una clave nueva. ¿Continuar?",
+		zenity.Title("Hygeia — reestablecer configuración"),
+		zenity.QuestionIcon,
+	)
+	if err != nil {
+		// Cancelar el diálogo es un flujo normal, no un error.
+		if err != zenity.ErrCanceled {
+			log.Printf("tray: diálogo de reset: %v", err)
+		}
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := client.Reset(ctx); err != nil {
+		_ = zenity.Error(
+			"No se pudo reestablecer la configuración:\n\n"+err.Error(),
+			zenity.Title("Hygeia"),
+			zenity.ErrorIcon,
+		)
+		return
+	}
+
+	_ = zenity.Info(
+		"Configuración reestablecida. Usa \"Introducir clave de agente…\" para volver a darlo de alta.",
 		zenity.Title("Hygeia"),
 		zenity.InfoIcon,
 	)
