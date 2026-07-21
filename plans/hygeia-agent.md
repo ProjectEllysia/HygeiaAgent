@@ -81,13 +81,22 @@ puertos de red (solo hace peticiones salientes → funciona detrás de NAT sin e
 
 ```
 hygeia-agent/
-  main.go                 # arranque, señales, bucle principal
-  config/                 # carga de config (fichero + env), enrollment
+  cmd/hygeia-agent/       # main del servicio: subcomandos + envoltorio del SO
+  cmd/hygeia-tray/        # main del companion de bandeja (§11)
+  agent/                  # bucle principal + estado observable por el tray
+  config/                 # carga de config (fichero + env), enrollment, permisos
   collector/              # un colector por familia: cpu, mem, disk, net, proc (gopsutil)
   buffer/                 # ring buffer en disco: resiliencia si el backend cae
   shipper/                # POST /hygeia/ingest, gzip, reintento con backoff
-  version.go              # agentVersion (va en cada payload)
+  control/                # canal local tray <-> servicio (§11.4)
+  internal/icon/          # iconos de bandeja por estado
+  internal/autostart/     # arranque del tray con la sesión (§11.1)
+  version/                # agentVersion (va en cada payload)
 ```
+
+> El §4 original situaba `main.go` y `version.go` en la raíz. Al aparecer un
+> segundo binario (§11) hicieron falta dos paquetes `main`, de ahí `cmd/`, y
+> la versión pasó a un paquete propio para poder compartirla entre ambos.
 
 **Bucle:** `ticker` cada `intervalSec` → colectores en paralelo (goroutines) con timeout →
 ensamblar payload (§9) → shipper. Si el POST falla, al **buffer** (ring en disco, tamaño
@@ -152,15 +161,15 @@ Cross-compilación desde un solo `GOOS/GOARCH` — sin toolchains por plataforma
 
 ## 7. Fases
 
-| Fase | Entregable |
-|---|---|
-| **0** | Prototipo Python+psutil: bucle → POST a `/hygeia/ingest`. Valida el backend. |
-| **1** | Agente Go: config + enrollment + colectores CPU/mem/disco + shipper. |
-| **2** | Red + procesos (top-N) + buffer en disco con reintento/backoff. |
-| **3** | Servicio del SO (systemd/Windows/launchd) + releases firmadas. |
-| **4** (opcional) | Señales de seguridad (puertos nuevos, cryptominer, logins fallidos). |
-| **5** (opcional, ver §10) | Colector de inventario de software (paquetes instalados) + envío diferencial a `/hygeia/inventory`. |
-| **6** (opcional, ver §11) | Companion de bandeja del sistema (`hygeia-tray`): estado del agente + enrollment con UI. |
+| Fase | Entregable | Estado |
+|---|---|---|
+| **0** | Prototipo Python+psutil: bucle → POST a `/hygeia/ingest`. Valida el backend. | omitida (se fue directo a Go) |
+| **1** | Agente Go: config + enrollment + colectores CPU/mem/disco + shipper. | ✅ |
+| **2** | Red + procesos (top-N) + buffer en disco con reintento/backoff. | ✅ |
+| **3** | Servicio del SO (systemd/Windows/launchd) + releases firmadas. | ✅ servicio · ❌ releases firmadas |
+| **4** (opcional) | Señales de seguridad (puertos nuevos, cryptominer, logins fallidos). | ❌ |
+| **5** (opcional, ver §10) | Colector de inventario de software (paquetes instalados) + envío diferencial a `/hygeia/inventory`. | ❌ |
+| **6** (opcional, ver §11) | Companion de bandeja del sistema (`hygeia-tray`): estado del agente + enrollment con UI. | ✅ |
 
 **Rebanada mínima:** Fase 0 (Python) contra las Fases 0+1 del backend → ves un heartbeat
 entrando en la DB. Luego Fase 1 en Go para el artefacto real.
@@ -228,7 +237,7 @@ Superficie mínima de ese control channel (no es la API de Ellysia, es interna
 tray↔servicio):
 
 ```
-GET  /status   → { "state": "connected"|"local_error"|"unconfigured", "lastPushAt": ..., "bufferSize": ... }
+GET  /status   → { "state": "connected"|"local_error"|"unconfigured"|"starting", "lastPushAt": ..., "bufferSize": ... }
 POST /enroll   → { "agentKey": "..." }   # el servicio la persiste en su propia config, con sus propios permisos
 ```
 

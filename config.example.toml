@@ -1,10 +1,31 @@
 # Ejemplo de configuración del agente Hygeia.
-# Copia este fichero a "config.toml" y rellena serverUrl y agentKey.
+#
+# Ubicación real cuando corre como servicio (§6):
+#   Windows  C:\ProgramData\Hygeia\config.toml
+#   Linux    /etc/hygeia/config.toml
+#   macOS    /Library/Application Support/Hygeia/config.toml
+#
+# Override de la ruta con HYGEIA_CONFIG, y del directorio de estado completo
+# (config + buffer + log) con HYGEIA_DATA_DIR.
+#
 # Cualquier campo puede sobreescribirse con variables de entorno:
 #   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH
 
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
-agentKey    = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
+
+# agentKey es OPCIONAL en el fichero. Si falta, el agente arranca igualmente
+# en estado "sin configurar": no recolecta ni envía nada, y espera a que el
+# companion de bandeja (hygeia-tray) le pase la clave (§11.3). Así se puede
+# desplegar el binario antes de dar de alta el activo.
+#
+# Al guardarla por esa vía, el agente reescribe este fichero con permisos
+# restringidos (0600 en Unix, DACL solo para SYSTEM/Administradores/dueño en
+# Windows) y SIN los comentarios de esta plantilla.
+# agentKey  = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
+
 intervalSec = 15
-bufferPath  = "hygeia-buffer.jsonl"
 collectors  = ["cpu", "memory", "disk", "network", "processes"]
+
+# Por defecto, buffer.jsonl dentro del directorio de estado. Descoméntalo
+# solo si necesitas otra ubicación.
+# bufferPath = "C:/ProgramData/Hygeia/buffer.jsonl"

@@ -5,7 +5,7 @@
 // llena, se descarta lo más viejo (nunca RAM ni disco ilimitados).
 //
 // Implementación: fichero JSONL (una línea = un payload JSON). Sobre ese
-// fichero se mantiene un índice lógico head/tail计数 acotado; la rotación es
+// fichero se mantiene un índice lógico head/tail acotado; la rotación es
 // truncado + reescritura. Creación/lectura tolerantes: si el fichero no existe
 // parte de cero; si está corrupto, se arranca limpio.
 package buffer
