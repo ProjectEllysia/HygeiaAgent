@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -22,8 +23,11 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.IntervalSec != 15 {
 		t.Errorf("IntervalSec = %d, want %d", cfg.IntervalSec, 15)
 	}
-	if cfg.BufferPath != "hygeia-buffer.jsonl" {
-		t.Errorf("BufferPath = %q, want %q", cfg.BufferPath, "hygeia-buffer.jsonl")
+	// El default dejó de ser un fichero relativo al working directory: el
+	// servicio puede arrancar con un cwd que no controla (p. ej. System32
+	// en Windows), así que vive en DataDir() junto al resto del estado.
+	if want := filepath.Join(DataDir(), "buffer.jsonl"); cfg.BufferPath != want {
+		t.Errorf("BufferPath = %q, want %q", cfg.BufferPath, want)
 	}
 	if len(cfg.Collectors) != 5 {
 		t.Errorf("len(Collectors) = %d, want %d", len(cfg.Collectors), 5)
@@ -39,12 +43,20 @@ func TestLoad_MissingServerURL(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingAgentKey(t *testing.T) {
+// Sin agentKey, Load NO debe fallar (§11.3): el servicio arranca en estado
+// "sin configurar" y espera el enrollment del tray por el canal de control.
+// Esta prueba antes esperaba justo lo contrario (error), de cuando
+// agentKey todavía era obligatorio — quedó obsoleta al introducir el
+// enrollment sin clave y el merge con esa rama la arrastró sin actualizar.
+func TestLoad_MissingAgentKeyIsNotAnError(t *testing.T) {
 	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
 
-	_, err := Load("nonexistent.toml")
-	if err == nil {
-		t.Fatal("expected error for missing agentKey")
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v, se esperaba nil (agentKey es opcional)", err)
+	}
+	if cfg.IsConfigured() {
+		t.Error("IsConfigured() = true sin agentKey, se esperaba false")
 	}
 }
 

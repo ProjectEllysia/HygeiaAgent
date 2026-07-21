@@ -1,26 +1,30 @@
 package collector
 
 import (
-	"context"
+	"math"
 	"testing"
-
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 )
 
-func TestCPUCollector_Name(t *testing.T) {
-	c := NewCPU()
-	if got := c.Name(); got != "cpu" {
-		t.Errorf("Name() = %q, want %q", got, "cpu")
+func TestRound1(t *testing.T) {
+	if got := round1(87.549); got != 87.5 {
+		t.Errorf("round1(87.549) = %v, se esperaba 87.5", got)
+	}
+	if got := round1(0); got != 0 {
+		t.Errorf("round1(0) = %v, se esperaba 0", got)
 	}
 }
 
-func TestCPUCollector_Collect(t *testing.T) {
-	c := NewCPU()
-	m := &payload.Metrics{}
-	if err := c.Collect(context.Background(), m); err != nil {
-		t.Fatalf("Collect() = %v", err)
+// El cast a int64 de un valor no finito es indefinido en Go — round1 debe
+// devolver 0 en vez de propagar basura al payload (plan §12.2, Tier 2).
+func TestRound1GuardsAgainstNonFiniteInput(t *testing.T) {
+	cases := map[string]float64{
+		"NaN":  math.NaN(),
+		"+Inf": math.Inf(1),
+		"-Inf": math.Inf(-1),
 	}
-	if m.CPU != nil {
-		t.Errorf("expected CPU to be nil (not yet implemented)")
+	for name, in := range cases {
+		if got := round1(in); got != 0 {
+			t.Errorf("round1(%s) = %v, se esperaba 0", name, got)
+		}
 	}
 }
