@@ -3,8 +3,15 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
+
+	"github.com/pelletier/go-toml/v2"
 )
+
+// maxIntervalSec acota intervalSec por arriba (24h) — ver Load.
+const maxIntervalSec = 86400
 
 // Config es la configuración del agente. Se carga de un fichero TOML
 // (config.toml) con override por variables de entorno. Cada campo del
@@ -15,31 +22,131 @@ type Config struct {
 	IntervalSec int      `toml:"intervalSec"`
 	Collectors  []string `toml:"collectors"`
 	BufferPath  string   `toml:"bufferPath"`
+
+	// path recuerda de dónde se cargó, para que Save() reescriba el mismo
+	// fichero sin que el caller tenga que arrastrar la ruta.
+	path string `toml:"-"`
 }
 
-// Load lee el fichero de config (TODO: parse TOML) y aplica los overrides
-// de entorno. Devuelve error si faltan los campos obligatorios.
+// DataDir es el directorio de estado del servicio: config, buffer y (en el
+// caso del canal de control por loopback) el fichero de token. El servicio
+// corre como LocalSystem/root con un working directory que no controlamos
+// (en Windows, System32), así que nunca se usan rutas relativas.
+func DataDir() string {
+	if v := os.Getenv("HYGEIA_DATA_DIR"); v != "" {
+		return v
+	}
+	switch runtime.GOOS {
+	case "windows":
+		programData := os.Getenv("ProgramData")
+		if programData == "" {
+			programData = `C:\ProgramData`
+		}
+		return filepath.Join(programData, "Hygeia")
+	case "darwin":
+		return "/Library/Application Support/Hygeia"
+	default:
+		return "/etc/hygeia"
+	}
+}
+
+// DefaultPath es la ruta del fichero de config del servicio.
+func DefaultPath() string {
+	if v := os.Getenv("HYGEIA_CONFIG"); v != "" {
+		return v
+	}
+	return filepath.Join(DataDir(), "config.toml")
+}
+
+// Load lee el fichero de config TOML y aplica los overrides de entorno.
+// Si el fichero no existe no es fatal: la config puede venir íntegramente
+// de entorno.
+//
+// La ausencia de agentKey TAMPOCO es fatal (§11.3): el servicio arranca en
+// estado "sin configurar" y espera a que el tray le haga enrollment por el
+// canal de control. Un servicio que crashea sin clave no podría ser
+// configurado nunca desde la bandeja.
 func Load(path string) (*Config, error) {
+	if path == "" {
+		path = DefaultPath()
+	}
 	c := &Config{
 		IntervalSec: 15,
-		BufferPath:  "hygeia-buffer.jsonl",
+		BufferPath:  filepath.Join(DataDir(), "buffer.jsonl"),
 		Collectors:  []string{"cpu", "memory", "disk", "network", "processes"},
+		path:        path,
 	}
 
-	// TODO: parsear el fichero TOML en `path` con, p. ej.:
-	//   github.com/pelletier/go-toml/v2  ->  toml.Unmarshal(data, c)
-	// Mientras tanto, la config se entrega por variables de entorno.
+	if data, err := os.ReadFile(path); err == nil {
+		if err := toml.Unmarshal(data, c); err != nil {
+			return nil, fmt.Errorf("config: parseando %q: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("config: leyendo %q: %w", path, err)
+	}
 
 	if err := applyEnv(c); err != nil {
 		return nil, err
 	}
+	if c.IntervalSec <= 0 {
+		c.IntervalSec = 15
+	}
+	// Tope defensivo: un typo tipo "intervalSec = 1500000" no debería dejar
+	// el agente mudo durante semanas (plan §12.2, Tier 2) — el activo
+	// dejaría de reportar y nadie lo notaría hasta mucho después.
+	if c.IntervalSec > maxIntervalSec {
+		c.IntervalSec = maxIntervalSec
+	}
 	if c.ServerURL == "" {
 		return nil, fmt.Errorf("config: serverUrl es obligatorio (fichero %q o HYGEIA_SERVER_URL)", path)
 	}
-	if c.AgentKey == "" {
-		return nil, fmt.Errorf("config: agentKey es obligatorio (fichero %q o HYGEIA_AGENT_KEY)", path)
-	}
 	return c, nil
+}
+
+// Path devuelve el fichero del que se cargó esta config.
+func (c *Config) Path() string { return c.path }
+
+// IsConfigured indica si el agente tiene clave y por tanto puede recolectar
+// y enviar. Sin clave, el bucle principal se queda quieto (§11.3).
+func (c *Config) IsConfigured() bool { return c.AgentKey != "" }
+
+// Save persiste la config al fichero del que se cargó, con permisos
+// restringidos (§5: la clave de agente nunca queda legible por otros
+// usuarios locales). Reescribe el fichero completo: los comentarios del
+// TOML original no se conservan.
+func (c *Config) Save() error {
+	if c.path == "" {
+		return fmt.Errorf("config: no hay ruta asociada, no se puede guardar")
+	}
+	dir := filepath.Dir(c.path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("config: creando directorio: %w", err)
+	}
+	if err := secureDir(dir); err != nil {
+		return err
+	}
+	data, err := toml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("config: serializando: %w", err)
+	}
+
+	// Escritura atómica: fichero temporal, se restringe ANTES de que lleve el
+	// nombre definitivo, y luego rename sobre el destino. Restringir después
+	// del rename dejaría una ventana en la que la clave está en su sitio
+	// final y todavía legible.
+	tmp := c.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("config: escribiendo temporal: %w", err)
+	}
+	if err := securePath(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, c.path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: renombrando a %q: %w", c.path, err)
+	}
+	return nil
 }
 
 func applyEnv(c *Config) error {

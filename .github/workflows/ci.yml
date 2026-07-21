@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancela ejecuciones en curso del mismo branch cuando llega un push nuevo —
+# no tiene sentido gastar minutos de CI en un commit que ya se superó.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build (los dos binarios y todos los paquetes)
+        run: go build ./...
+
+      # -race necesita cgo. ubuntu-latest (gcc) y macos-latest (clang, ya
+      # hace falta para compilar hygeia-tray vía cgo en darwin) lo tienen de
+      # fábrica; windows-latest no trae un toolchain de C fiable, así que ahí
+      # se corre sin -race en vez de arriesgar un CI intermitente.
+      - name: go test -race
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+
+      - name: go test
+        if: runner.os == 'Windows'
+        run: go test ./...

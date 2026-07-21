@@ -7,80 +7,44 @@ import (
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 )
 
-func TestNewRegistry(t *testing.T) {
+type fakeCollector struct{ name string }
+
+func (f *fakeCollector) Name() string                                    { return f.name }
+func (f *fakeCollector) Collect(context.Context, *payload.Metrics) error { return nil }
+
+func TestRegistryBuildDefaultsToAllWhenNamesEmpty(t *testing.T) {
 	r := NewRegistry()
-	if r == nil {
-		t.Fatal("expected non-nil registry")
-	}
-	if len(r.factories) != 5 {
-		t.Errorf("len(factories) = %d, want 5", len(r.factories))
+	if got := len(r.Build(nil)); got != 5 {
+		t.Errorf("Build(nil) devolvió %d colectores, se esperaban 5 (todos los registrados por defecto)", got)
 	}
 }
 
-func TestRegistry_Register(t *testing.T) {
+func TestRegistryBuildFiltersUnknownNames(t *testing.T) {
 	r := NewRegistry()
-	r.Register("custom", func() Collector {
-		return &stubCollector{name: "custom"}
-	})
-	if _, ok := r.factories["custom"]; !ok {
-		t.Error("custom factory not found after Register")
+	cs := r.Build([]string{"cpu", "un-typo-que-no-existe", "memory"})
+	if got := len(cs); got != 2 {
+		t.Fatalf("Build con un nombre desconocido devolvió %d, se esperaban 2 (cpu, memory)", got)
+	}
+	if cs[0].Name() != "cpu" || cs[1].Name() != "memory" {
+		t.Errorf("Build = %v, se esperaba [cpu memory] en ese orden", namesOf(cs))
 	}
 }
 
-func TestRegistry_Build_All(t *testing.T) {
-	r := NewRegistry()
-	cs := r.Build(nil)
-	if len(cs) != 5 {
-		t.Errorf("len(collectors) = %d, want 5", len(cs))
-	}
+func TestRegistryBuildRespectsRequestedOrder(t *testing.T) {
+	r := &Registry{factories: map[string]func() Collector{}}
+	r.Register("a", func() Collector { return &fakeCollector{name: "a"} })
+	r.Register("b", func() Collector { return &fakeCollector{name: "b"} })
 
-	names := make(map[string]bool)
-	for _, c := range cs {
-		names[c.Name()] = true
-	}
-	for _, expected := range []string{"cpu", "memory", "disk", "network", "processes"} {
-		if !names[expected] {
-			t.Errorf("missing collector %q", expected)
-		}
+	cs := r.Build([]string{"b", "a"})
+	if got := namesOf(cs); len(got) != 2 || got[0] != "b" || got[1] != "a" {
+		t.Errorf("Build([\"b\",\"a\"]) = %v, se esperaba [b a]", got)
 	}
 }
 
-func TestRegistry_Build_Subset(t *testing.T) {
-	r := NewRegistry()
-	cs := r.Build([]string{"cpu", "memory"})
-	if len(cs) != 2 {
-		t.Fatalf("len(collectors) = %d, want 2", len(cs))
+func namesOf(cs []Collector) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name()
 	}
-	if cs[0].Name() != "cpu" {
-		t.Errorf("cs[0].Name() = %q, want %q", cs[0].Name(), "cpu")
-	}
-	if cs[1].Name() != "memory" {
-		t.Errorf("cs[1].Name() = %q, want %q", cs[1].Name(), "memory")
-	}
-}
-
-func TestRegistry_Build_UnknownNames(t *testing.T) {
-	r := NewRegistry()
-	cs := r.Build([]string{"cpu", "unknown", "memory"})
-	if len(cs) != 2 {
-		t.Errorf("len(collectors) = %d, want 2 (unknown should be skipped)", len(cs))
-	}
-}
-
-func TestRegistry_Build_EmptyNames(t *testing.T) {
-	r := NewRegistry()
-	cs := r.Build([]string{})
-	if len(cs) != 5 {
-		t.Errorf("len(collectors) = %d, want 5 (empty names should use defaults)", len(cs))
-	}
-}
-
-// stubCollector implements Collector for testing.
-type stubCollector struct {
-	name string
-}
-
-func (s *stubCollector) Name() string              { return s.name }
-func (s *stubCollector) Collect(context.Context, *payload.Metrics) error {
-	return nil
+	return out
 }

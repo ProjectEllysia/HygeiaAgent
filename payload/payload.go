@@ -13,7 +13,7 @@ type Payload struct {
 	CollectedAt  time.Time    `json:"collectedAt"`
 	Host         HostInfo     `json:"host"`
 	Metrics      Metrics      `json:"metrics"`
-	LocalAlerts  []LocalAlert `json:"localAlerts"`
+	LocalAlerts  []LocalAlert `json:"localAlerts,omitempty"`
 }
 
 // HostInfo identifica la máquina y su contexto (README §9, bloque "host").
@@ -36,7 +36,7 @@ type Metrics struct {
 
 type CPUMetrics struct {
 	UsagePct    float64   `json:"usagePct"`
-	LoadAvg     []float64 `json:"loadAvg"`
+	LoadAvg     []float64 `json:"loadAvg,omitempty"`
 	CtxSwitches uint64    `json:"ctxSwitches"`
 	PerCorePct  []float64 `json:"perCorePct"`
 }

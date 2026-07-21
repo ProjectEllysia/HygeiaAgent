@@ -14,20 +14,85 @@
 
 ## 0. Arranque rápido (repo)
 
-Este repo contiene el **esqueleto Go compilable** de la Fase 1 (scaffolding con
-`TODO`s). Sin dependencias externas todavía: compila con la stdlib.
+Estado: **Fases 1-3 y 6 implementadas.** Dos binarios.
 
 ```
-main.go  version.go  config.example.toml  go.mod
-payload/  config/  collector/  buffer/  shipper/   docs/GUIA-GO.md
+cmd/hygeia-agent/   servicio headless: recolecta y envía (§6)
+cmd/hygeia-tray/    companion de bandeja: estado + enrollment (§11)
+
+config/  collector/  buffer/  shipper/  payload/   el núcleo del agente
+agent/                                             bucle principal + estado
+control/                                           canal local tray <-> servicio (§11.4)
+internal/icon/       iconos de bandeja por estado
+internal/autostart/  arranque con la sesión del usuario (§11.1)
 ```
 
-1. Instala Go (ver `docs/GUIA-GO.md` §2).
-2. `cp config.example.toml config.toml` y rellena `serverUrl` + `agentKey`
-   (o usa `HYGEIA_SERVER_URL` / `HYGEIA_AGENT_KEY`).
-3. `go run .`
-4. Rellena los `TODO` (gopsutil, TOML, shipper, buffer) siguiendo
-   `docs/GUIA-GO.md` §7.
+### Desarrollo (primer plano)
+
+```bash
+cp config.example.toml config.toml
+export HYGEIA_CONFIG=$PWD/config.toml      # o HYGEIA_DATA_DIR=$PWD
+go run ./cmd/hygeia-agent
+```
+
+Sin `agentKey` el agente **no falla**: arranca en estado "sin configurar" y
+espera a que el tray le pase la clave (§11.3).
+
+### Compilar los binarios
+
+```bash
+go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/version.Version=1.0.0" ./cmd/hygeia-agent
+
+# El tray, en Windows, sin ventana de consola:
+go build -ldflags "-H=windowsgui" ./cmd/hygeia-tray
+```
+
+### Instalar como servicio
+
+`hygeia-agent` se registra en el gestor de servicios del SO
+(systemd / servicio de Windows / launchd) vía `kardianos/service`. Requiere
+privilegios de administrador o root:
+
+```bash
+hygeia-agent install     # registra el servicio
+hygeia-agent start
+hygeia-agent status
+hygeia-agent stop
+hygeia-agent uninstall
+```
+
+La config vive en el directorio de estado del servicio, no junto al binario
+(el servicio corre con un working directory que no controlamos):
+
+| SO | Directorio de estado |
+|---|---|
+| Windows | `C:\ProgramData\Hygeia\` |
+| Linux | `/etc/hygeia/` |
+| macOS | `/Library/Application Support/Hygeia/` |
+
+Ahí van `config.toml`, `buffer.jsonl` y `hygeia-agent.log`. En modo servicio
+los logs van al fichero; en primer plano, a stderr.
+
+### Instalar el icono de bandeja (solo estaciones de trabajo)
+
+`hygeia-tray` es opcional y **no requiere privilegios**: se registra en el
+arranque por usuario, no en el del sistema.
+
+```bash
+hygeia-tray                    # abre el icono ahora
+hygeia-tray enable-autostart   # que arranque al iniciar sesión
+hygeia-tray status
+hygeia-tray disable-autostart
+```
+
+Un servidor headless corre `hygeia-agent` solo, sin tray (§11.6).
+
+### Matriz de compilación
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| `hygeia-agent` | ✅ | ✅ | ✅ (cross-compila) |
+| `hygeia-tray` | ✅ | ✅ | requiere cgo + toolchain nativo |
 
 > **Guía didáctica de Go** (instalación, programación y compilación desde cero):
 > [`docs/GUIA-GO.md`](docs/GUIA-GO.md).
@@ -99,13 +164,22 @@ puertos de red (solo hace peticiones salientes → funciona detrás de NAT sin e
 
 ```
 hygeia-agent/
-  main.go                 # arranque, señales, bucle principal
-  config/                 # carga de config (fichero + env), enrollment
+  cmd/hygeia-agent/       # main del servicio: subcomandos + envoltorio del SO
+  cmd/hygeia-tray/        # main del companion de bandeja (§11)
+  agent/                  # bucle principal + estado observable por el tray
+  config/                 # carga de config (fichero + env), enrollment, permisos
   collector/              # un colector por familia: cpu, mem, disk, net, proc (gopsutil)
   buffer/                 # ring buffer en disco: resiliencia si el backend cae
   shipper/                # POST /hygeia/ingest, gzip, reintento con backoff
-  version.go              # agentVersion (va en cada payload)
+  control/                # canal local tray <-> servicio (§11.4)
+  internal/icon/          # iconos de bandeja por estado
+  internal/autostart/     # arranque del tray con la sesión (§11.1)
+  version/                # agentVersion (va en cada payload)
 ```
+
+> El §4 original situaba `main.go` y `version.go` en la raíz. Al aparecer un
+> segundo binario (§11) hicieron falta dos paquetes `main`, de ahí `cmd/`, y
+> la versión pasó a un paquete propio para poder compartirla entre ambos.
 
 **Bucle:** `ticker` cada `intervalSec` → colectores en paralelo (goroutines) con timeout →
 ensamblar payload (§9) → shipper. Si el POST falla, al **buffer** (ring en disco, tamaño
@@ -153,13 +227,13 @@ Cross-compilación desde un solo `GOOS/GOARCH` — sin toolchains por plataforma
 
 ## 7. Fases
 
-| Fase | Entregable |
-|---|---|
-| **0** | Prototipo Python+psutil: bucle → POST a `/hygeia/ingest`. Valida el backend. |
-| **1** | Agente Go: config + enrollment + colectores CPU/mem/disco + shipper. |
-| **2** | Red + procesos (top-N) + buffer en disco con reintento/backoff. |
-| **3** | Servicio del SO (systemd/Windows/launchd) + releases firmadas. |
-| **4** (opcional) | Señales de seguridad (puertos nuevos, cryptominer, logins fallidos). |
+| Fase | Entregable | Estado |
+|---|---|---|
+| **0** | Prototipo Python+psutil: bucle → POST a `/hygeia/ingest`. Valida el backend. | omitida (se fue directo a Go) |
+| **1** | Agente Go: config + enrollment + colectores CPU/mem/disco + shipper. | ✅ |
+| **2** | Red + procesos (top-N) + buffer en disco con reintento/backoff. | ✅ |
+| **3** | Servicio del SO (systemd/Windows/launchd) + releases firmadas. | ✅ servicio · ❌ releases firmadas |
+| **4** (opcional) | Señales de seguridad (puertos nuevos, cryptominer, logins fallidos). | ❌ |
 
 **Rebanada mínima:** Fase 0 (Python) contra las Fases 0+1 del backend → ves un heartbeat
 entrando en la DB. Luego Fase 1 en Go para el artefacto real.

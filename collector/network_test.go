@@ -1,26 +1,24 @@
 package collector
 
-import (
-	"context"
-	"testing"
+import "testing"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
-)
-
-func TestNetworkCollector_Name(t *testing.T) {
-	c := NewNetwork()
-	if got := c.Name(); got != "network" {
-		t.Errorf("Name() = %q, want %q", got, "network")
+func TestRate(t *testing.T) {
+	cases := []struct {
+		name     string
+		cur, old uint64
+		elapsed  float64
+		want     float64
+	}{
+		{"incremento normal", 1100, 1000, 10, 10},
+		{"sin cambio", 500, 500, 10, 0},
+		{"wrap-around: contador reiniciado (interfaz reconectada)", 50, 1000, 10, 5},
+		{"elapsed de 1 segundo", 100, 0, 1, 100},
 	}
-}
-
-func TestNetworkCollector_Collect(t *testing.T) {
-	c := NewNetwork()
-	m := &payload.Metrics{}
-	if err := c.Collect(context.Background(), m); err != nil {
-		t.Fatalf("Collect() = %v", err)
-	}
-	if len(m.Network) != 0 {
-		t.Errorf("expected empty Network, got %v", m.Network)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rate(c.cur, c.old, c.elapsed); got != c.want {
+				t.Errorf("rate(%d, %d, %v) = %v, se esperaba %v", c.cur, c.old, c.elapsed, got, c.want)
+			}
+		})
 	}
 }
