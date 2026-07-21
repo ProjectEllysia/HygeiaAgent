@@ -34,4 +34,10 @@ func TestProcessCollector_Collect(t *testing.T) {
 	if m.Processes.Total == 0 {
 		t.Error("Total = 0, se esperaba al menos el propio proceso de test")
 	}
+	// TopCPU nunca debe ser nil (aunque esté vacío): un nil slice serializa
+	// a JSON `null`, que el schema del backend rechaza con 422 al no
+	// permitir null en un campo de lista (bug real detectado en producción).
+	if m.Processes.TopCPU == nil {
+		t.Error("TopCPU = nil, se esperaba slice vacío (nil serializa a JSON null)")
+	}
 }

@@ -102,7 +102,7 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 	c.prevTime = now
 	c.mu.Unlock()
 
-	var topCPU []payload.ProcessInfo
+	topCPU := []payload.ProcessInfo{}
 	if haveBaseline {
 		sort.Slice(samples, func(i, j int) bool { return samples[i].cpu > samples[j].cpu })
 		topCPU = toProcessInfo(ctx, samples, true)
