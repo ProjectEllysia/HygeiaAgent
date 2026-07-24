@@ -214,6 +214,37 @@ func TestCollectPayloadTruncatesCollectedAtToMicroseconds(t *testing.T) {
 	}
 }
 
+// collectPayload adjunta el inventario pendiente una sola vez: tras
+// consumirlo, el siguiente payload no debe volver a traerlo. Así se evita
+// mandar el listado completo de software en cada heartbeat (ver
+// payload.Payload.Inventory y agent.scanInventory).
+func TestCollectPayloadAttachesInventoryOnce(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	a.lastInventory = &payload.Inventory{
+		Software: []payload.Software{{Name: "Test App"}},
+	}
+
+	first := a.collectPayload(context.Background())
+	if first.Inventory == nil {
+		t.Fatal("primer payload tras un escaneo: Inventory = nil, se esperaba el resultado pendiente")
+	}
+	if len(first.Inventory.Software) != 1 || first.Inventory.Software[0].Name != "Test App" {
+		t.Errorf("Inventory.Software = %+v, no coincide con lo dejado en lastInventory", first.Inventory.Software)
+	}
+
+	a.mu.Lock()
+	pending := a.lastInventory
+	a.mu.Unlock()
+	if pending != nil {
+		t.Error("lastInventory no se limpió tras consumirlo en collectPayload")
+	}
+
+	second := a.collectPayload(context.Background())
+	if second.Inventory != nil {
+		t.Errorf("segundo payload sin escaneo nuevo: Inventory = %+v, se esperaba nil", second.Inventory)
+	}
+}
+
 // drainBuffer debe descartar (no reencolar) un payload que el backend
 // rechaza de forma permanente — si no, queda dando vueltas en el buffer sin
 // poder entregarse nunca (bug real: payloads de horas de antigüedad
