@@ -14,15 +14,19 @@ type Payload struct {
 	Host         HostInfo     `json:"host"`
 	Metrics      Metrics      `json:"metrics"`
 	LocalAlerts  []LocalAlert `json:"localAlerts,omitempty"`
+	// Inventory viaja en su propio ciclo (agent.inventoryLoop), distinto del
+	// heartbeat: se adjunta una sola vez al primer payload tras cada escaneo
+	// y se omite en el resto, para no cargar cada heartbeat con el listado
+	// completo de software instalado.
+	Inventory *Inventory `json:"inventory,omitempty"`
 }
 
 // HostInfo identifica la máquina y su contexto (README §9, bloque "host").
 type HostInfo struct {
-	Hostname  	string `json:"hostname"`
-	OS        	string `json:"os"`
-	Kernel    	string `json:"kernel"`
-	UptimeSec 	uint64 `json:"uptimeSec"`
-	Inventory  	Inventory `json:"inventory"`
+	Hostname  string `json:"hostname"`
+	OS        string `json:"os"`
+	Kernel    string `json:"kernel"`
+	UptimeSec uint64 `json:"uptimeSec"`
 }
 
 type Inventory struct {
