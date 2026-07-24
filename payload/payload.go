@@ -18,10 +18,29 @@ type Payload struct {
 
 // HostInfo identifica la máquina y su contexto (README §9, bloque "host").
 type HostInfo struct {
-	Hostname  string `json:"hostname"`
-	OS        string `json:"os"`
-	Kernel    string `json:"kernel"`
-	UptimeSec uint64 `json:"uptimeSec"`
+	Hostname  	string `json:"hostname"`
+	OS        	string `json:"os"`
+	Kernel    	string `json:"kernel"`
+	UptimeSec 	uint64 `json:"uptimeSec"`
+	Inventory  	Inventory `json:"inventory"`
+}
+
+type Inventory struct {
+	Software []Software `json:"software"`
+}
+
+type Software struct {
+	Name    		string `json:"name"`
+	Type 			string `json:"type"`
+	Vendor 			string `json:"vendor"`
+	Version 		string `json:"version"`
+	GUID  			string `json:"guid"`
+	InstalledAt 	time.Time `json:"installedAt"`
+	InstallPath 	string `json:"installPath"`
+	Architecture 	string `json:"architecture"`
+	SizeBytes 		uint64 `json:"sizeBytes"`
+	Status 			string `json:"status"`
+	Source 			string `json:"source"`
 }
 
 // Metrics agrupa todas las familias de métricas. Los punteros/slices se
