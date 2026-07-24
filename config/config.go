@@ -13,15 +13,29 @@ import (
 // maxIntervalSec acota intervalSec por arriba (24h) — ver Load.
 const maxIntervalSec = 86400
 
+// minInventoryIntervalSec y maxInventoryIntervalSec acotan el escaneo de
+// inventario: por abajo para que un typo no machaque el registro en cada
+// tick, por arriba (7 días) para que igual siga refrescándose solo sin
+// intervención manual.
+const (
+	minInventoryIntervalSec = 300
+	maxInventoryIntervalSec = 604800
+)
+
 // Config es la configuración del agente. Se carga de un fichero TOML
 // (config.toml) con override por variables de entorno. Cada campo del
 // fichero se mapea por nombre (ver config.example.toml).
 type Config struct {
-	ServerURL   string   `toml:"serverUrl"`
-	AgentKey    string   `toml:"agentKey"`
-	IntervalSec int      `toml:"intervalSec"`
-	Collectors  []string `toml:"collectors"`
-	BufferPath  string   `toml:"bufferPath"`
+	ServerURL            string   `toml:"serverUrl"`
+	AgentKey             string   `toml:"agentKey"`
+	IntervalSec          int      `toml:"intervalSec"`
+	Collectors           []string `toml:"collectors"`
+	BufferPath           string   `toml:"bufferPath"`
+	// InventoryIntervalSec controla la cadencia del escaneo de software,
+	// independiente de IntervalSec (README plan: el inventario no debería
+	// enviarse en cada heartbeat). A diferencia de IntervalSec, el backend
+	// no puede ajustarlo vía nextIntervalSec: es solo config local.
+	InventoryIntervalSec int `toml:"inventoryIntervalSec"`
 
 	// path recuerda de dónde se cargó, para que Save() reescriba el mismo
 	// fichero sin que el caller tenga que arrastrar la ruta.
@@ -71,10 +85,11 @@ func Load(path string) (*Config, error) {
 		path = DefaultPath()
 	}
 	c := &Config{
-		IntervalSec: 15,
-		BufferPath:  filepath.Join(DataDir(), "buffer.jsonl"),
-		Collectors:  []string{"cpu", "memory", "disk", "network", "processes"},
-		path:        path,
+		IntervalSec:          15,
+		BufferPath:           filepath.Join(DataDir(), "buffer.jsonl"),
+		Collectors:           []string{"cpu", "memory", "disk", "network", "processes"},
+		InventoryIntervalSec: 21600, // 6h: el software instalado cambia poco
+		path:                 path,
 	}
 
 	if data, err := os.ReadFile(path); err == nil {
@@ -96,6 +111,15 @@ func Load(path string) (*Config, error) {
 	// dejaría de reportar y nadie lo notaría hasta mucho después.
 	if c.IntervalSec > maxIntervalSec {
 		c.IntervalSec = maxIntervalSec
+	}
+	if c.InventoryIntervalSec <= 0 {
+		c.InventoryIntervalSec = 21600
+	}
+	if c.InventoryIntervalSec < minInventoryIntervalSec {
+		c.InventoryIntervalSec = minInventoryIntervalSec
+	}
+	if c.InventoryIntervalSec > maxInventoryIntervalSec {
+		c.InventoryIntervalSec = maxInventoryIntervalSec
 	}
 	if c.ServerURL == "" {
 		return nil, fmt.Errorf("config: serverUrl es obligatorio (fichero %q o HYGEIA_SERVER_URL)", path)
@@ -165,6 +189,13 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv("HYGEIA_BUFFER_PATH"); v != "" {
 		c.BufferPath = v
+	}
+	if v := os.Getenv("HYGEIA_INVENTORY_INTERVAL_SEC"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: HYGEIA_INVENTORY_INTERVAL_SEC inválido: %w", err)
+		}
+		c.InventoryIntervalSec = n
 	}
 	return nil
 }
