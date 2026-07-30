@@ -133,7 +133,12 @@ func onReady() {
 
 	startup := systray.AddMenuItemCheckbox("Arrancar con la sesión", "Abrir este icono al iniciar sesión", autostartEnabled())
 	systray.AddMenuItem(fmt.Sprintf("Versión %s", version.Version), "").Disable()
-	quit := systray.AddMenuItem("Salir", "Cierra el icono (el servicio sigue corriendo)")
+	// "Ocultar icono", no "Salir": esto cierra SOLO el companion de bandeja.
+	// El servicio (hygeia-agent) sigue recolectando y enviando — no puede
+	// pararlo desde aquí (§11.7: el canal de control no expone start/stop) ni
+	// debería: es un proceso sin privilegios y el activo dejaría de reportar
+	// sin que nadie se entere. Llamarlo "Salir" prometía lo contrario.
+	quit := systray.AddMenuItem("Ocultar icono", "Cierra el icono de la bandeja; el servicio sigue monitorizando este activo")
 
 	client := control.NewClient()
 	refresh(client, m)
