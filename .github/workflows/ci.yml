@@ -28,7 +28,13 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # macos-latest trae Xcode 16.3+, cuyo linker por defecto ("ld-prime")
+      # usa chained fixups y rompe el link de binarios cgo (gopsutil,
+      # systray) con "unknown file type in ...o". -no_fixup_chains es el
+      # workaround vigente ya que -ld_classic fue removido en ese Xcode.
       - name: go build (los dos binarios y todos los paquetes)
+        env:
+          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go build ./...
 
       # -race necesita cgo. ubuntu-latest (gcc) y macos-latest (clang, ya
@@ -37,6 +43,8 @@ jobs:
       # se corre sin -race en vez de arriesgar un CI intermitente.
       - name: go test -race
         if: runner.os != 'Windows'
+        env:
+          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go test -race ./...
 
       - name: go test

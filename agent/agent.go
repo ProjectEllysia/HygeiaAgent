@@ -32,12 +32,17 @@ type Agent struct {
 	collectors []collector.Collector
 	buf        *buffer.RingBuffer
 
-	mu         sync.Mutex
-	cfg        *config.Config
-	shp        *shipper.Shipper
-	state      string
-	lastPushAt time.Time
-	lastError  string
+	mu            sync.Mutex
+	cfg           *config.Config
+	shp           *shipper.Shipper
+	state         string
+	lastPushAt    time.Time
+	lastError     string
+	// lastInventory guarda el resultado del último escaneo aún no adjuntado
+	// a ningún payload. collectPayload lo consume y lo limpia (envío único):
+	// así el inventario completo no viaja en cada heartbeat, solo en el
+	// primero tras cada ciclo de inventoryLoop.
+	lastInventory *payload.Inventory
 }
 
 // New construye el agente a partir de la config ya cargada. Si la config no
@@ -155,6 +160,15 @@ func (a *Agent) Run(ctx context.Context) {
 		return
 	}
 
+	// Escaneo de inventario inicial síncrono (acotado por
+	// inventoryScanTimeout, 30s como máximo): así el PRIMER heartbeat ya
+	// lleva el inventario, sin que el usuario/backend tengan que esperar a
+	// que inventoryLoop dispare su primer tick, horas más tarde.
+	if a.cfg.InventoryIntervalSec > 0 {
+		a.scanInventory(ctx)
+	}
+	go a.inventoryLoop(ctx)
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -192,6 +206,77 @@ func (a *Agent) sleepJitter(ctx context.Context, interval time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
+	}
+}
+
+// inventoryScanTimeout acota cuánto puede tardar un escaneo de inventario
+// (enumeración de registro, bastante más lenta que los colectores de
+// métricas) sin bloquear inventoryLoop indefinidamente si el SO se cuelga.
+const inventoryScanTimeout = 30 * time.Second
+
+// inventoryLoop corre en su propia goroutine, con cadencia independiente del
+// heartbeat (cfg.InventoryIntervalSec, normalmente horas): escanear el
+// registro es mucho más lento que los colectores de métricas y el dato
+// cambia con poca frecuencia, así que atarlo al ticker principal sería tanto
+// lento como derrochador. El resultado queda en a.lastInventory bajo mutex;
+// collectPayload lo consume y lo limpia la próxima vez que arme un payload
+// (envío único, ver payload.Payload.Inventory).
+//
+// Sin jitter de arranque: a diferencia del heartbeat, un escaneo de
+// inventario no golpea el backend, solo el propio host, así que no hay
+// "manada" que evitar. El primer escaneo lo hace Run() de forma síncrona
+// antes de arrancar este loop (para garantizar que el primer heartbeat ya
+// lleve inventario); este loop solo se ocupa de los escaneos siguientes.
+func (a *Agent) inventoryLoop(ctx context.Context) {
+	interval := time.Duration(a.cfg.InventoryIntervalSec) * time.Second
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.scanInventory(ctx)
+		}
+	}
+}
+
+// scanInventory ejecuta un escaneo con timeout propio (inventoryScanTimeout,
+// mayor que el de los colectores de métricas porque enumerar el registro
+// puede tardar más). collector.Inventory no acepta contexto, así que corre
+// en su propia goroutine: si supera el timeout, scanInventory simplemente
+// deja de esperarla y sigue (la goroutine huérfana termina sola y su
+// resultado se descarta). Un fallo solo se loguea: se reintentará en el
+// siguiente tick de inventoryLoop.
+func (a *Agent) scanInventory(ctx context.Context) {
+	cctx, cancel := context.WithTimeout(ctx, inventoryScanTimeout)
+	defer cancel()
+
+	type result struct {
+		inv payload.Inventory
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		inv, err := collector.Inventory()
+		done <- result{inv, err}
+	}()
+
+	select {
+	case <-cctx.Done():
+		a.log.Warn("escaneo de inventario superó el timeout", "timeout", inventoryScanTimeout)
+	case r := <-done:
+		if r.err != nil {
+			a.log.Warn("escaneo de inventario falló", "err", r.err)
+			return
+		}
+		a.mu.Lock()
+		a.lastInventory = &r.inv
+		a.mu.Unlock()
 	}
 }
 
@@ -276,6 +361,13 @@ func (a *Agent) collectPayload(ctx context.Context) *payload.Payload {
 		CollectedAt: time.Now().UTC().Truncate(time.Microsecond),
 		Host:        collector.Host(),
 	}
+
+	a.mu.Lock()
+	if a.lastInventory != nil {
+		p.Inventory = a.lastInventory
+		a.lastInventory = nil
+	}
+	a.mu.Unlock()
 
 	var wg sync.WaitGroup
 	for _, c := range a.collectors {

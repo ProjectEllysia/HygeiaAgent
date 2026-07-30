@@ -32,6 +32,55 @@ func TestLoad_Defaults(t *testing.T) {
 	if len(cfg.Collectors) != 5 {
 		t.Errorf("len(Collectors) = %d, want %d", len(cfg.Collectors), 5)
 	}
+	if cfg.InventoryIntervalSec != 21600 {
+		t.Errorf("InventoryIntervalSec = %d, want %d", cfg.InventoryIntervalSec, 21600)
+	}
+}
+
+func TestLoad_InventoryIntervalEnvOverride(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_INVENTORY_INTERVAL_SEC", "3600")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryIntervalSec != 3600 {
+		t.Errorf("InventoryIntervalSec = %d, want %d", cfg.InventoryIntervalSec, 3600)
+	}
+}
+
+// Un valor por debajo del piso no debería dejar el escaneo de inventario
+// corriendo prácticamente en cada tick por un typo en config/env.
+func TestLoad_InventoryIntervalBelowFloorIsClamped(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_INVENTORY_INTERVAL_SEC", "10")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryIntervalSec != minInventoryIntervalSec {
+		t.Errorf("InventoryIntervalSec = %d, want %d (piso)", cfg.InventoryIntervalSec, minInventoryIntervalSec)
+	}
+}
+
+// Un valor absurdamente alto no debería dejar el inventario sin refrescarse
+// durante meses/años por un typo (mismo espíritu que el tope de IntervalSec).
+func TestLoad_InventoryIntervalAboveCeilingIsClamped(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_INVENTORY_INTERVAL_SEC", "99999999")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryIntervalSec != maxInventoryIntervalSec {
+		t.Errorf("InventoryIntervalSec = %d, want %d (tope)", cfg.InventoryIntervalSec, maxInventoryIntervalSec)
+	}
 }
 
 func TestLoad_MissingServerURL(t *testing.T) {

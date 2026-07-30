@@ -9,7 +9,8 @@
 # (config + buffer + log) con HYGEIA_DATA_DIR.
 #
 # Cualquier campo puede sobreescribirse con variables de entorno:
-#   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH
+#   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH,
+#   HYGEIA_INVENTORY_INTERVAL_SEC
 
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
 
@@ -25,6 +26,12 @@ serverUrl   = "https://ellysia.tu-dominio/hygeia"
 
 intervalSec = 15
 collectors  = ["cpu", "memory", "disk", "network", "processes"]
+
+# Cadencia del escaneo de software instalado, independiente de intervalSec:
+# el inventario cambia poco y escanearlo es más lento que el resto de
+# colectores, así que no viaja en cada heartbeat (se adjunta una sola vez
+# tras cada escaneo). Rango aceptado: 300s (5min) a 604800s (7 días).
+# inventoryIntervalSec = 21600
 
 # Por defecto, buffer.jsonl dentro del directorio de estado. Descoméntalo
 # solo si necesitas otra ubicación.
