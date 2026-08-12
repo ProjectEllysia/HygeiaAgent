@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
@@ -69,6 +70,85 @@ type PermanentError struct {
 
 func (e *PermanentError) Error() string {
 	return fmt.Sprintf("shipper: backend rechazó el payload de forma permanente (status %d)", e.StatusCode)
+}
+
+// ThrottledError indica que el backend rechazó el heartbeat por CADENCIA
+// (429): ni está caído (transitorio) ni el payload es inválido (permanente),
+// simplemente llegó antes del suelo de intervalo que el backend impone por
+// clave de agente (§16.2).
+//
+// Es un tercer tipo porque pide una reacción distinta a los otros dos.
+// Tratarlo como transitorio —lo que se hacía antes— disparaba el backoff
+// exponencial: cuatro intentos que el suelo iba a rechazar igual hasta que
+// pasara el tiempo, unos 7 segundos por payload gastados en peticiones
+// condenadas. Lo correcto es esperar exactamente lo que el backend dice y
+// volver una sola vez.
+//
+// El caso real que lo produce es el drenado del buffer, que envía los
+// heartbeats aplazados uno detrás de otro y por definición viola el suelo.
+type ThrottledError struct {
+	StatusCode int
+	// RetryAfter es cuánto hay que esperar antes de volver a enviar. Sale de
+	// la cabecera Retry-After o, si no está, de details.min_interval_sec del
+	// cuerpo. Nunca es cero: si el backend no lo dice, vale defaultThrottleWait.
+	RetryAfter time.Duration
+}
+
+func (e *ThrottledError) Error() string {
+	return fmt.Sprintf("shipper: backend rechazó el heartbeat por cadencia (status %d), esperar %s",
+		e.StatusCode, e.RetryAfter)
+}
+
+// defaultThrottleWait es cuánto esperar cuando el backend responde 429 pero
+// no dice cuánto (versión antigua sin expose_details, o un proxy que corta
+// por su cuenta). Cinco segundos es el suelo por defecto del backend.
+const defaultThrottleWait = 5 * time.Second
+
+// maxThrottleWait acota lo que el agente acepta de un backend: un
+// Retry-After absurdo no debe poder dormir el drenado durante horas.
+const maxThrottleWait = 5 * time.Minute
+
+// throttleBodyLimit acota cuánto se lee del cuerpo de un 429. Solo hace falta
+// un JSON diminuto; leer sin tope dejaría al agente a merced de lo que el
+// otro extremo decida mandar.
+const throttleBodyLimit = 8 * 1024
+
+// newThrottledError construye el error de cadencia leyendo cuánto hay que
+// esperar. Se prueban las dos fuentes por orden de autoridad: la cabecera
+// estándar Retry-After (que puede poner también un proxy por delante del
+// backend) y, si no está, el details.min_interval_sec que expone la propia
+// excepción de Hygeia.
+func newThrottledError(resp *http.Response) *ThrottledError {
+	e := &ThrottledError{StatusCode: resp.StatusCode, RetryAfter: defaultThrottleWait}
+
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		// Solo la forma en segundos: la variante con fecha HTTP existe en el
+		// estándar pero ningún extremo de esta ruta la emite, y aceptarla
+		// obligaría a fiarse del reloj del otro lado.
+		if secs, err := strconv.Atoi(v); err == nil && secs > 0 {
+			e.RetryAfter = clampThrottleWait(time.Duration(secs) * time.Second)
+			return e
+		}
+	}
+
+	var body struct {
+		Details struct {
+			MinIntervalSec int `json:"min_interval_sec"`
+		} `json:"details"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, throttleBodyLimit)).Decode(&body); err == nil {
+		if body.Details.MinIntervalSec > 0 {
+			e.RetryAfter = clampThrottleWait(time.Duration(body.Details.MinIntervalSec) * time.Second)
+		}
+	}
+	return e
+}
+
+func clampThrottleWait(d time.Duration) time.Duration {
+	if d > maxThrottleWait {
+		return maxThrottleWait
+	}
+	return d
 }
 
 // isPermanentStatus identifica los códigos donde el problema es el propio
@@ -131,6 +211,16 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 					return nil, fmt.Errorf("shipper: decode respuesta: %w", derr)
 				}
 				return r, nil
+			}
+			// La cadencia se resuelve antes de cerrar el cuerpo: es de donde
+			// sale cuánto hay que esperar. Sin reintentos aquí — el suelo se
+			// mide contra el reloj del backend, así que insistir dentro de
+			// este bucle solo gasta intentos; quien decide cuándo volver es
+			// el caller, que sabe si le queda presupuesto de ciclo.
+			if resp.StatusCode == http.StatusTooManyRequests {
+				throttled := newThrottledError(resp)
+				resp.Body.Close()
+				return nil, throttled
 			}
 			resp.Body.Close()
 			if isPermanentStatus(resp.StatusCode) {

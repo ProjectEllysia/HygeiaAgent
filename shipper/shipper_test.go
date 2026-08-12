@@ -234,3 +234,113 @@ func TestSendMalformedResponseBody(t *testing.T) {
 		t.Fatal("Send() = nil, se esperaba error al decodificar una respuesta 200 no-JSON")
 	}
 }
+
+// El 429 no es "el backend está caído": es "has llegado antes de tiempo".
+// Reintentarlo con backoff exponencial —lo que se hacía al tratarlo como
+// transitorio— gastaba cuatro intentos que el suelo de cadencia iba a
+// rechazar igual hasta que pasara el tiempo. Send debe volver a la primera.
+func TestSendDoesNotRetryOnThrottle(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"details":{"min_interval_sec":5}}`))
+	}))
+	defer srv.Close()
+
+	s := NewShipper(srv.URL, "k")
+	fastBackoff(s)
+
+	_, err := s.Send(context.Background(), testPayload())
+
+	var thr *ThrottledError
+	if !errors.As(err, &thr) {
+		t.Fatalf("Send() = %v, se esperaba *ThrottledError", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("el backend recibió %d peticiones, se esperaba 1 (sin reintentos)", got)
+	}
+	if thr.RetryAfter != 5*time.Second {
+		t.Errorf("RetryAfter = %v, se esperaba 5s (de details.min_interval_sec)", thr.RetryAfter)
+	}
+}
+
+// La cabecera estándar manda sobre el cuerpo: puede ponerla un proxy delante
+// del backend, que es quien de verdad está cortando en ese caso.
+func TestSendPrefersRetryAfterHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "12")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"details":{"min_interval_sec":5}}`))
+	}))
+	defer srv.Close()
+
+	s := NewShipper(srv.URL, "k")
+	fastBackoff(s)
+
+	_, err := s.Send(context.Background(), testPayload())
+
+	var thr *ThrottledError
+	if !errors.As(err, &thr) {
+		t.Fatalf("Send() = %v, se esperaba *ThrottledError", err)
+	}
+	if thr.RetryAfter != 12*time.Second {
+		t.Errorf("RetryAfter = %v, se esperaba 12s (cabecera Retry-After)", thr.RetryAfter)
+	}
+}
+
+// Un backend antiguo (sin expose_details) o un proxy que corta por su cuenta
+// responden 429 sin decir cuánto esperar. El agente no puede quedarse con
+// cero: esperar nada es reintentar de inmediato, que es el bucle que se
+// quería evitar.
+func TestSendFallsBackToDefaultThrottleWait(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`sin cuerpo JSON`))
+	}))
+	defer srv.Close()
+
+	s := NewShipper(srv.URL, "k")
+	fastBackoff(s)
+
+	_, err := s.Send(context.Background(), testPayload())
+
+	var thr *ThrottledError
+	if !errors.As(err, &thr) {
+		t.Fatalf("Send() = %v, se esperaba *ThrottledError", err)
+	}
+	if thr.RetryAfter != defaultThrottleWait {
+		t.Errorf("RetryAfter = %v, se esperaba %v", thr.RetryAfter, defaultThrottleWait)
+	}
+}
+
+// Un Retry-After absurdo no debe poder dormir el drenado durante horas: el
+// agente acota lo que acepta del otro extremo.
+func TestSendClampsAbsurdRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "86400")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	s := NewShipper(srv.URL, "k")
+	fastBackoff(s)
+
+	_, err := s.Send(context.Background(), testPayload())
+
+	var thr *ThrottledError
+	if !errors.As(err, &thr) {
+		t.Fatalf("Send() = %v, se esperaba *ThrottledError", err)
+	}
+	if thr.RetryAfter != maxThrottleWait {
+		t.Errorf("RetryAfter = %v, se esperaba el tope %v", thr.RetryAfter, maxThrottleWait)
+	}
+}
+
+// El 429 NO es permanente: el mismo payload sí se entregará más tarde. Si se
+// clasificara como permanente, el agente lo descartaría y perdería el dato.
+func TestThrottleIsNotPermanent(t *testing.T) {
+	if isPermanentStatus(http.StatusTooManyRequests) {
+		t.Error("429 no debe estar en isPermanentStatus: el payload es válido, solo llegó pronto")
+	}
+}

@@ -308,13 +308,27 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 	resp, err := shp.Send(ctx, p)
 	if err != nil {
 		var permErr *shipper.PermanentError
-		if errors.As(err, &permErr) {
+		var thrErr *shipper.ThrottledError
+		switch {
+		case errors.As(err, &permErr):
 			// El backend rechazó ESTE payload (esquema, reloj, tamaño), no
 			// que esté caído: guardarlo en el buffer solo garantizaría que
 			// vuelva a fallar exactamente igual más tarde, ocupando un
 			// slot para siempre (el bug que motivó este tipo de error).
 			a.log.Warn("envío rechazado de forma permanente, descartando payload", "err", err)
-		} else {
+		case errors.As(err, &thrErr):
+			// El dato es bueno, solo llegó antes del suelo de cadencia: al
+			// buffer, y el drenado del próximo ciclo lo entrega ya acompasado.
+			// Que esto pase en el heartbeat en vivo (y no solo al drenar)
+			// significa que el intervalo local va por debajo del mínimo del
+			// backend; se corrige solo, porque el backend manda su
+			// nextIntervalSec en cuanto acepta un envío.
+			a.log.Warn("heartbeat por debajo del suelo de cadencia del backend, aplazando",
+				"espera", thrErr.RetryAfter)
+			if perr := a.buf.Push(p); perr != nil {
+				a.log.Error("no se pudo guardar en buffer", "err", perr)
+			}
+		default:
 			a.log.Warn("envío fallido, guardando en buffer", "err", err)
 			if perr := a.buf.Push(p); perr != nil {
 				a.log.Error("no se pudo guardar en buffer", "err", perr)
@@ -385,13 +399,48 @@ func (a *Agent) collectPayload(ctx context.Context) *payload.Payload {
 	return p
 }
 
-// drainBuffer envía los payloads aplazados mientras el backend responda.
+// maxDrainPerCycle acota cuántos payloads aplazados se envían en un mismo
+// ciclo. Antes el drenado era un bucle sin límite dentro de runOnce, que a su
+// vez corre en el bucle del ticker: vaciar un buffer lleno dejaba al agente
+// sin recolectar ni enviar nada nuevo durante horas — para recuperar datos
+// viejos se dejaba de tomar los actuales.
+const maxDrainPerCycle = 5
+
+// drainBudget es la fracción del intervalo que el drenado puede ocupar. La
+// otra mitad queda libre para que el ciclo siguiente arranque a su hora.
+const drainBudgetFraction = 2
+
+// drainBuffer envía los payloads aplazados, acotado por número y por tiempo.
+//
+// El drenado choca de frente con el suelo de cadencia del backend (§16.2): al
+// enviar los payloads uno detrás de otro, el segundo llega a cero segundos
+// del primero y el backend responde 429. Antes ese 429 se trataba como fallo
+// transitorio y disparaba el backoff exponencial del shipper, así que cada
+// payload costaba unos 7 segundos de reintentos condenados; ahora el shipper
+// lo devuelve como ThrottledError con el tiempo exacto de espera y aquí se
+// espera eso, una vez, si cabe en el presupuesto del ciclo.
+//
+// ponytail: con un suelo de 5 s y un intervalo de 15 s esto drena en torno a
+// UN payload por ciclo, así que recuperar una caída de una hora cuesta otra
+// hora. Es el techo de este diseño, no un descuido: mientras la unidad de
+// envío sea un heartbeat por petición, el suelo de cadencia manda. Lo levanta
+// el endpoint de ingesta por lotes (A-03, opción 3), que entrega todo el
+// buffer en una sola petición y no lo roza.
 func (a *Agent) drainBuffer(ctx context.Context, shp *shipper.Shipper) {
-	for {
-		p, err := a.buf.Pop()
-		if err != nil {
+	deadline := time.Now().Add(a.drainBudget())
+
+	for sent := 0; sent < maxDrainPerCycle; {
+		if !time.Now().Before(deadline) {
+			a.log.Debug("presupuesto de drenado agotado, sigue en el próximo ciclo",
+				"enviados", sent, "pendientes", a.buf.Len())
 			return
 		}
+
+		p, err := a.buf.Pop()
+		if err != nil {
+			return // buffer vacío (io.EOF) o ilegible: nada que drenar
+		}
+
 		if _, err := shp.Send(ctx, p); err != nil {
 			var permErr *shipper.PermanentError
 			if errors.As(err, &permErr) {
@@ -403,11 +452,62 @@ func (a *Agent) drainBuffer(ctx context.Context, shp *shipper.Shipper) {
 				a.log.Warn("payload en buffer rechazado de forma permanente, descartando", "err", err)
 				continue
 			}
+
+			var thrErr *shipper.ThrottledError
+			if errors.As(err, &thrErr) {
+				// El payload es válido, solo llegó demasiado pronto: vuelve a
+				// la cola y se espera el suelo. Reencolar por el final lo
+				// manda al fondo, y da igual: los payloads son independientes
+				// entre sí y el backend ordena la serie por received_at, no
+				// por el orden en que se entregan.
+				_ = a.buf.Push(p)
+				if !a.waitWithin(ctx, thrErr.RetryAfter, deadline) {
+					a.log.Debug("drenado en pausa por cadencia del backend",
+						"espera", thrErr.RetryAfter, "pendientes", a.buf.Len())
+					return
+				}
+				continue
+			}
+
 			a.log.Warn("drenado interrumpido, reintentará más tarde", "err", err)
 			// devolver el payload al buffer para no perderlo: reintento en el
 			// próximo ciclo exitoso.
 			_ = a.buf.Push(p)
 			return
 		}
+		sent++
+	}
+}
+
+// drainBudget es cuánto tiempo de este ciclo puede consumir el drenado.
+func (a *Agent) drainBudget() time.Duration {
+	a.mu.Lock()
+	interval := time.Duration(a.cfg.IntervalSec) * time.Second
+	a.mu.Unlock()
+	if interval <= 0 {
+		return defaultThrottleWaitFallback
+	}
+	return interval / drainBudgetFraction
+}
+
+// defaultThrottleWaitFallback cubre una config con intervalo no positivo, que
+// config.Load ya no debería dejar pasar, pero drainBudget no puede asumirlo
+// sin quedarse con un presupuesto de cero (que apagaría el drenado entero).
+const defaultThrottleWaitFallback = 5 * time.Second
+
+// waitWithin duerme `d` solo si termina antes de `deadline`. Devuelve false
+// si no cabe o si el contexto se canceló: en ambos casos el caller debe
+// abandonar el drenado y volver en el ciclo siguiente, no seguir esperando.
+func (a *Agent) waitWithin(ctx context.Context, d time.Duration, deadline time.Time) bool {
+	if d <= 0 || !time.Now().Add(d).Before(deadline) {
+		return false
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
