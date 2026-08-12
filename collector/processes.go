@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -12,6 +13,33 @@ import (
 
 // topN es el número de procesos que se reportan en topCpu/topMem (§3).
 const topN = 5
+
+// numCPU es el número de núcleos lógicos del equipo. Se captura una vez: no
+// cambia durante la vida del proceso, y es el divisor que cpuRate necesita.
+var numCPU = runtime.NumCPU()
+
+// cpuRate convierte el consumo de CPU de un proceso entre dos ciclos en
+// porcentaje de la capacidad TOTAL del equipo.
+//
+// deltaSec es tiempo de CPU, y ese tiempo suma todos los núcleos: un proceso
+// que satura cuatro núcleos durante diez segundos de reloj acumula cuarenta
+// segundos de CPU. Dividir solo entre el tiempo transcurrido daría 400, que
+// es la semántica de `top` — legítima, pero incompatible con el contrato de
+// ingesta, que acota cpuPct a [0,100] y rechaza el heartbeat entero si se
+// sale (ver roundPct en cpu.go).
+//
+// Al dividir además entre el número de núcleos, 100 pasa a significar "este
+// proceso tiene la máquina entera para él". Es la misma escala que
+// metrics.cpu.usagePct (media de todos los núcleos), así que ambas cifras se
+// pueden comparar entre sí en el panel: un usagePct de 90 con un proceso al
+// 85 dice que ese proceso ES la carga; el mismo usagePct con todo el top por
+// debajo de 5 dice que la carga está repartida.
+func cpuRate(deltaSec, elapsedSec float64, cores int) float64 {
+	if elapsedSec <= 0 || cores <= 0 {
+		return 0
+	}
+	return 100 * deltaSec / (elapsedSec * float64(cores))
+}
 
 // ProcessCollector guarda el tiempo de CPU acumulado de cada PID entre
 // ciclos (mismo patrón que NetworkCollector con las interfaces) para poder
@@ -88,7 +116,7 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 			newCPU[p.Pid] = total
 			if haveBaseline {
 				if prev, ok := prevCPU[p.Pid]; ok && total >= prev {
-					cpuPct = 100 * (total - prev) / elapsed
+					cpuPct = cpuRate(total-prev, elapsed, numCPU)
 				}
 			}
 		}
@@ -135,9 +163,9 @@ func toProcessInfo(ctx context.Context, samples []procSample, byCPU bool) []payl
 		name, _ := s.proc.NameWithContext(ctx)
 		pi := payload.ProcessInfo{PID: s.pid, Name: name}
 		if byCPU {
-			pi.CPUPct = round1(s.cpu)
+			pi.CPUPct = roundPct(s.cpu)
 		} else {
-			pi.MemPct = round1(s.mem)
+			pi.MemPct = roundPct(s.mem)
 		}
 		out = append(out, pi)
 	}

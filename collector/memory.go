@@ -3,8 +3,8 @@ package collector
 import (
 	"context"
 
-	gpsmem "github.com/shirou/gopsutil/v4/mem"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	gpsmem "github.com/shirou/gopsutil/v4/mem"
 )
 
 type MemoryCollector struct{}
@@ -21,10 +21,10 @@ func (c *MemoryCollector) Collect(ctx context.Context, m *payload.Metrics) error
 	out := &payload.MemoryMetrics{
 		TotalBytes: vm.Total,
 		UsedBytes:  vm.Used,
-		UsagePct:   round1(vm.UsedPercent),
+		UsagePct:   roundPct(vm.UsedPercent),
 	}
 	if sm, err := gpsmem.SwapMemoryWithContext(ctx); err == nil {
-		out.SwapUsedPct = round1(sm.UsedPercent)
+		out.SwapUsedPct = roundPct(sm.UsedPercent)
 	}
 	m.Memory = out
 	return nil

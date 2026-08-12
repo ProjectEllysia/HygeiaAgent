@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	gpsdisk "github.com/shirou/gopsutil/v4/disk"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	gpsdisk "github.com/shirou/gopsutil/v4/disk"
 )
 
 type DiskCollector struct{}
@@ -68,7 +68,7 @@ func (c *DiskCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 		}
 		out = append(out, payload.DiskMetrics{
 			Mount:     p.Mountpoint,
-			UsagePct:  round1(u.UsedPercent),
+			UsagePct:  roundPct(u.UsedPercent),
 			FreeBytes: u.Free,
 		})
 	}
