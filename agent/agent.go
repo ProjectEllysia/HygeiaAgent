@@ -32,12 +32,12 @@ type Agent struct {
 	collectors []collector.Collector
 	buf        *buffer.RingBuffer
 
-	mu            sync.Mutex
-	cfg           *config.Config
-	shp           *shipper.Shipper
-	state         string
-	lastPushAt    time.Time
-	lastError     string
+	mu         sync.Mutex
+	cfg        *config.Config
+	shp        *shipper.Shipper
+	state      string
+	lastPushAt time.Time
+	lastError  string
 	// lastInventory guarda el resultado del último escaneo aún no adjuntado
 	// a ningún payload. collectPayload lo consume y lo limpia (envío único):
 	// así el inventario completo no viaja en cada heartbeat, solo en el
@@ -52,7 +52,7 @@ func New(log *slog.Logger, cfg *config.Config) *Agent {
 	a := &Agent{
 		log:        log,
 		collectors: collector.NewRegistry().Build(cfg.Collectors),
-		buf:        buffer.NewRingBuffer(cfg.BufferPath, 1000),
+		buf:        buffer.NewRingBuffer(cfg.BufferPath, cfg.BufferMaxItems),
 		cfg:        cfg,
 		state:      control.StateUnconfigured,
 	}
