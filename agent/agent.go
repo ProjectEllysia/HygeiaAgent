@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -42,6 +43,12 @@ type Agent struct {
 	// a ningún payload. collectPayload lo consume y lo limpia (envío único):
 	// así el inventario completo no viaja en cada heartbeat, solo en el
 	// primero tras cada ciclo de inventoryLoop.
+	//
+	// Si ese payload acaba descartado por un rechazo permanente, restoreInventory
+	// lo devuelve aquí: el motivo del rechazo rara vez es el inventario, y
+	// perderlo obligaría a esperar horas al siguiente escaneo. En cambio, un
+	// payload que va al buffer se lleva su inventario consigo y lo entrega al
+	// drenar, así que ahí no hay nada que reponer.
 	lastInventory *payload.Inventory
 }
 
@@ -274,10 +281,44 @@ func (a *Agent) scanInventory(ctx context.Context) {
 			a.log.Warn("escaneo de inventario falló", "err", r.err)
 			return
 		}
+		inv := a.capInventory(r.inv)
 		a.mu.Lock()
-		a.lastInventory = &r.inv
+		a.lastInventory = &inv
 		a.mu.Unlock()
 	}
+}
+
+// capInventory ordena el listado por nombre y lo recorta a
+// cfg.InventoryMaxItems.
+//
+// El recorte existe porque el backend acota el inventario
+// (features.hygeia.limits.maxInventoryItems) y pasarse NO cuesta el
+// inventario: cuesta el heartbeat entero, con un error de validación que el
+// shipper clasifica como permanente y descarta. Como el escaneo se repite
+// cada pocas horas con el mismo tamaño, ese activo perdía un heartbeat cada
+// pocas horas para siempre y nunca llegaba a tener inventario.
+//
+// Se recorta en vez de rechazar —al revés que el backend, que sí rechaza—
+// porque aquí el dato es propio, no entrada hostil: enseñar 1500 aplicaciones
+// de 2100 es útil, enseñar cero no. Y se ordena antes de cortar para que el
+// subconjunto visible sea el mismo entre escaneos: sin ordenar, el listado
+// que sobrevive depende del orden de enumeración del registro y parpadearía
+// de un escaneo a otro.
+func (a *Agent) capInventory(inv payload.Inventory) payload.Inventory {
+	sort.Slice(inv.Software, func(i, j int) bool {
+		return inv.Software[i].Name < inv.Software[j].Name
+	})
+
+	a.mu.Lock()
+	max := a.cfg.InventoryMaxItems
+	a.mu.Unlock()
+
+	if max > 0 && len(inv.Software) > max {
+		a.log.Warn("inventario recortado al máximo configurado",
+			"encontradas", len(inv.Software), "enviadas", max)
+		inv.Software = inv.Software[:max]
+	}
+	return inv
 }
 
 // tick ejecuta un ciclo y aplica el intervalo que sugiera el backend.
@@ -316,6 +357,11 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 			// vuelva a fallar exactamente igual más tarde, ocupando un
 			// slot para siempre (el bug que motivó este tipo de error).
 			a.log.Warn("envío rechazado de forma permanente, descartando payload", "err", err)
+			// Con el payload se iría también el inventario que llevaba
+			// adjunto, que no tiene por qué tener nada que ver con el motivo
+			// del rechazo y no se volvería a escanear hasta horas después.
+			// Vuelve a la cola para que lo lleve el próximo heartbeat.
+			a.restoreInventory(p.Inventory)
 		case errors.As(err, &thrErr):
 			// El dato es bueno, solo llegó antes del suelo de cadencia: al
 			// buffer, y el drenado del próximo ciclo lo entrega ya acompasado.
@@ -352,6 +398,21 @@ func (a *Agent) setState(state string, err error) {
 		a.lastError = err.Error()
 	} else {
 		a.lastError = ""
+	}
+}
+
+// restoreInventory devuelve a la cola el inventario que viajaba en un payload
+// que se acabó descartando. No pisa un escaneo más reciente: si inventoryLoop
+// dejó otro mientras tanto, manda el nuevo — reponer el viejo encima sería
+// retroceder.
+func (a *Agent) restoreInventory(inv *payload.Inventory) {
+	if inv == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lastInventory == nil {
+		a.lastInventory = inv
 	}
 }
 

@@ -248,3 +248,41 @@ collectors = ["cpu", "memory"]
 		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, "http://toml:8080")
 	}
 }
+
+// El tope del inventario debe quedar por debajo del del backend
+// (maxInventoryItems, 2000): pasarse no cuesta el inventario, cuesta el
+// heartbeat entero.
+func TestLoad_InventoryMaxItemsDefaultsBelowBackendCeiling(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryMaxItems != defaultInventoryMaxItems {
+		t.Errorf("InventoryMaxItems = %d, want %d", cfg.InventoryMaxItems, defaultInventoryMaxItems)
+	}
+	// El tope del backend en SecOpsConfig.json. Si alguien sube este default
+	// por encima, el heartbeat entero empieza a rebotar en cuanto un equipo
+	// tenga suficientes aplicaciones.
+	const backendCeiling = 2000
+	if cfg.InventoryMaxItems >= backendCeiling {
+		t.Errorf("InventoryMaxItems = %d, debe quedar por debajo del tope del backend (%d)",
+			cfg.InventoryMaxItems, backendCeiling)
+	}
+}
+
+func TestLoad_InventoryMaxItemsEnvOverride(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_INVENTORY_MAX_ITEMS", "500")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryMaxItems != 500 {
+		t.Errorf("InventoryMaxItems = %d, want 500", cfg.InventoryMaxItems)
+	}
+}

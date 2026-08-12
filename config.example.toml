@@ -10,7 +10,8 @@
 #
 # Cualquier campo puede sobreescribirse con variables de entorno:
 #   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH,
-#   HYGEIA_INVENTORY_INTERVAL_SEC, HYGEIA_BUFFER_MAX_ITEMS
+#   HYGEIA_INVENTORY_INTERVAL_SEC, HYGEIA_BUFFER_MAX_ITEMS,
+#   HYGEIA_INVENTORY_MAX_ITEMS
 
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
 
@@ -32,6 +33,14 @@ collectors  = ["cpu", "memory", "disk", "network", "processes"]
 # colectores, así que no viaja en cada heartbeat (se adjunta una sola vez
 # tras cada escaneo). Rango aceptado: 300s (5min) a 604800s (7 días).
 # inventoryIntervalSec = 21600
+
+# Máximo de aplicaciones que se reportan por escaneo. Debe quedar por DEBAJO
+# del tope del backend (features.hygeia.limits.maxInventoryItems, 2000 por
+# defecto): pasarse de ahí no cuesta el inventario, cuesta el heartbeat
+# entero, porque el backend lo rechaza con un error de validación. Si el
+# equipo tiene más aplicaciones, se ordenan por nombre y se envían las
+# primeras, dejando aviso en el log.
+# inventoryMaxItems = 1500
 
 # Por defecto, buffer.jsonl dentro del directorio de estado. Descoméntalo
 # solo si necesitas otra ubicación.

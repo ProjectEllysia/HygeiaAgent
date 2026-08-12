@@ -412,3 +412,96 @@ func TestDrainBufferStopsAtMaxPerCycle(t *testing.T) {
 		t.Errorf("buf.Len() = %d, se esperaba %d (el resto espera al próximo ciclo)", got, want)
 	}
 }
+
+// El backend acota el inventario (maxInventoryItems=2000) y pasarse no cuesta
+// el inventario: cuesta el heartbeat ENTERO, con un error de validación que
+// el shipper clasifica como permanente. Como el escaneo se repite cada pocas
+// horas con el mismo tamaño, ese activo perdía un heartbeat cada pocas horas
+// para siempre y nunca llegaba a tener inventario.
+func TestCapInventoryTruncatesToTheConfiguredMaximum(t *testing.T) {
+	t.Setenv("HYGEIA_INVENTORY_MAX_ITEMS", "3")
+	a, _ := newTestAgent(t, testKey)
+
+	inv := payload.Inventory{Software: []payload.Software{
+		{Name: "Zulu"}, {Name: "Alfa"}, {Name: "Mike"}, {Name: "Bravo"}, {Name: "Yankee"},
+	}}
+
+	got := a.capInventory(inv)
+
+	if len(got.Software) != 3 {
+		t.Fatalf("len(Software) = %d, se esperaba 3", len(got.Software))
+	}
+	// Ordenado antes de cortar: sin eso, qué aplicaciones sobreviven depende
+	// del orden de enumeración del registro y parpadearía entre escaneos.
+	want := []string{"Alfa", "Bravo", "Mike"}
+	for i, name := range want {
+		if got.Software[i].Name != name {
+			t.Errorf("Software[%d].Name = %q, se esperaba %q", i, got.Software[i].Name, name)
+		}
+	}
+}
+
+// Un inventario que ya cabe se ordena igual, pero no se toca de tamaño.
+func TestCapInventoryLeavesSmallInventoriesIntact(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	inv := payload.Inventory{Software: []payload.Software{{Name: "Zulu"}, {Name: "Alfa"}}}
+	got := a.capInventory(inv)
+
+	if len(got.Software) != 2 {
+		t.Fatalf("len(Software) = %d, se esperaba 2", len(got.Software))
+	}
+	if got.Software[0].Name != "Alfa" {
+		t.Errorf("Software[0].Name = %q, se esperaba %q", got.Software[0].Name, "Alfa")
+	}
+}
+
+// El inventario se adjunta a UN payload y se limpia. Si ese payload concreto
+// muere por un rechazo permanente —que casi nunca tiene que ver con el
+// inventario: reloj desincronizado, un porcentaje fuera de rango…— el
+// inventario se iba con él y el activo se quedaba sin inventario hasta el
+// siguiente escaneo, horas después.
+func TestPermanentRejectRestoresTheInventoryForTheNextHeartbeat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.mu.Lock()
+	a.lastInventory = &payload.Inventory{Software: []payload.Software{{Name: "7-Zip"}}}
+	a.mu.Unlock()
+
+	a.runOnce(context.Background())
+
+	a.mu.Lock()
+	restored := a.lastInventory
+	a.mu.Unlock()
+
+	if restored == nil {
+		t.Fatal("lastInventory = nil tras un rechazo permanente; el inventario se perdió")
+	}
+	if len(restored.Software) != 1 || restored.Software[0].Name != "7-Zip" {
+		t.Errorf("lastInventory = %+v, se esperaba el inventario original", restored)
+	}
+}
+
+// Reponer no debe pisar un escaneo más reciente: si inventoryLoop dejó otro
+// mientras el envío estaba en curso, manda el nuevo.
+func TestRestoreInventoryDoesNotOverwriteANewerScan(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	fresh := &payload.Inventory{Software: []payload.Software{{Name: "nuevo"}}}
+	a.mu.Lock()
+	a.lastInventory = fresh
+	a.mu.Unlock()
+
+	a.restoreInventory(&payload.Inventory{Software: []payload.Software{{Name: "viejo"}}})
+
+	a.mu.Lock()
+	got := a.lastInventory
+	a.mu.Unlock()
+	if got != fresh {
+		t.Errorf("lastInventory = %+v, se esperaba el escaneo más reciente", got)
+	}
+}
