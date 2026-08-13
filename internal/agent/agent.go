@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/buffer"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/collector"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/shipper"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/version"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/buffer"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/collector"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/shipper"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/version"
 )
 
 // Agent encapsula el bucle del servicio y su estado observable.

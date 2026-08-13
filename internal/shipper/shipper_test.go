@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // fastBackoff acorta el backoff exponencial para que los tests de reintento

@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // Valores por defecto del reintento exponencial (README §4).

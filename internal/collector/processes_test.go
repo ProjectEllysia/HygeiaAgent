@@ -8,7 +8,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 func TestProcessCollector_Name(t *testing.T) {

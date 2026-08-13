@@ -6,7 +6,7 @@ import (
 
 	"golang.org/x/sys/windows/registry"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // uninstallPaths cubre las tres ubicaciones donde Windows registra software instalado [web:68]

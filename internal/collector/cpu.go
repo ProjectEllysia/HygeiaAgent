@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpscpu "github.com/shirou/gopsutil/v4/cpu"
 	gpsload "github.com/shirou/gopsutil/v4/load"
 )

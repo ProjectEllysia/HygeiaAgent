@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // Collector es la interfaz común a todas las familias de métricas.

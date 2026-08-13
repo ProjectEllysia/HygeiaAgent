@@ -24,9 +24,9 @@ import (
 
 	"github.com/kardianos/service"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/agent"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/agent"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/logring"
 )
 

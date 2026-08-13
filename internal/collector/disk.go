@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpsdisk "github.com/shirou/gopsutil/v4/disk"
 )
 

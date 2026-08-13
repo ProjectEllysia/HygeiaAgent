@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 func newTestPayload(tag string) *payload.Payload {

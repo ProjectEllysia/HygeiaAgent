@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 type fakeCollector struct{ name string }

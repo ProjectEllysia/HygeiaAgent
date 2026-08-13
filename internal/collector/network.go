@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpsnet "github.com/shirou/gopsutil/v4/net"
 )
 

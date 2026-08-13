@@ -7,8 +7,8 @@ import (
 
 	"github.com/kardianos/service"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/version"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/version"
 )
 
 // runCommand despacha los subcomandos de gestión del servicio.

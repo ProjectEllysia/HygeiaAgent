@@ -1,7 +1,7 @@
 package collector
 
 import (
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // Inventory releva el software instalado en el equipo; la implementación

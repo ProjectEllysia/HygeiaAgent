@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 const testKey = "abcd1234.0123456789abcdef"

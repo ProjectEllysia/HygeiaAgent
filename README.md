@@ -41,7 +41,7 @@ espera a que el tray le pase la clave (§11.3).
 ### Compilar los binarios
 
 ```bash
-go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/version.Version=1.0.0" ./cmd/hygeia-agent
+go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.0" ./cmd/hygeia-agent
 
 # El tray, en Windows, sin ventana de consola:
 go build -ldflags "-H=windowsgui" ./cmd/hygeia-tray

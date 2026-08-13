@@ -4,7 +4,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpshost "github.com/shirou/gopsutil/v4/host"
 )
 

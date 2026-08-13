@@ -46,7 +46,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
 // RingBuffer es seguro para uso concurrente: el bucle principal del agente

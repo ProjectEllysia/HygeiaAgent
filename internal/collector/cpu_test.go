@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpscpu "github.com/shirou/gopsutil/v4/cpu"
 )
 

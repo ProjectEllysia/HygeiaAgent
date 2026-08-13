@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 	gpsmem "github.com/shirou/gopsutil/v4/mem"
 )
 
