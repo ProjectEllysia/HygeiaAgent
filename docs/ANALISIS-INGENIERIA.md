@@ -492,8 +492,27 @@ disco. Tres cambios sencillos, en orden de importancia:
    hacer por lotes: en lugar de recortar un elemento cada vez, recortar el diez por ciento
    cuando se llegue al tope. Así el coste amortizado por `Push` es constante.
 
-Con esos tres cambios, el buffer pasa de cuadrático a lineal sin cambiar su formato en disco ni
-sus garantías, y las pruebas existentes en `buffer/buffer_test.go` siguen siendo válidas.
+Con esos tres cambios, el buffer pasa de cuadrático a lineal sin cambiar su formato en disco.
+
+> **Medición posterior (implementado el 13 de agosto de 2026).** Con los benchmarks
+> `BenchmarkLenOnFullBuffer` y `BenchmarkDrainFullBuffer`, sobre un buffer lleno de mil
+> payloads, medidos antes y después en Windows:
+>
+> | Operación | Antes (mediana) | Después (mediana) | Cambio |
+> |---|---|---|---|
+> | `Len()` | 1,51 ms | 45 ns | **unas 33 000 veces más rápido** |
+> | Drenar los mil payloads | 7,47 s | 1,58 s | **4,7 veces más rápido** |
+>
+> La cifra de `Len()` es la que de verdad importa en el día a día, porque es la que el icono
+> de bandeja provoca cada cinco segundos de forma indefinida: pasa de leer un fichero de tres
+> megabytes a devolver un entero.
+>
+> Una corrección respecto a lo escrito arriba: la afirmación de que "las pruebas existentes
+> siguen siendo válidas" resultó ser falsa. `TestPushEvictsOldestWhenFull` exigía que el
+> buffer nunca superase `maxItems` **exactamente**, y la rotación por lotes tolera a
+> propósito una holgura del diez por ciento antes de compactar. Esa prueba se sustituyó por
+> otra que afirma la propiedad que de verdad se quiere garantizar —crecimiento acotado y
+> descarte del más viejo primero— en lugar del número exacto.
 
 ---
 
