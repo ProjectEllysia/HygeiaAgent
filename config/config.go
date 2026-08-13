@@ -22,20 +22,62 @@ const (
 	maxInventoryIntervalSec = 604800
 )
 
+// Cotas de bufferMaxItems (cuántos heartbeats aplazados caben en disco).
+//
+// El default de 1000 son unas 4 h de histórico con intervalSec=15. No se sube
+// más por ahora aunque el backend ya acepte hasta 24 h de backfill
+// (maxBackfillSec): el ring buffer reescribe el fichero entero en cada
+// operación, así que su coste crece con el CUADRADO del número de elementos.
+// Subir el tope antes de que el buffer sea lineal (A-07) cambiaría un
+// problema de pérdida de datos por uno de entrada/salida.
+const (
+	defaultBufferMaxItems = 1000
+	maxBufferMaxItems     = 100000 // ~300 MB a 3 KB por payload
+)
+
+// Cotas de inventoryMaxItems (cuántas aplicaciones caben en un escaneo).
+//
+// El default deja holgura deliberada por debajo del tope del backend
+// (features.hygeia.limits.maxInventoryItems, 2000): pasarse de ahí no cuesta
+// el inventario, cuesta el HEARTBEAT ENTERO, porque el backend responde con
+// un error de validación que el shipper clasifica como permanente. Y como el
+// escaneo se repite cada pocas horas con el mismo tamaño, el fallo se repetía
+// para siempre en ese activo.
+const (
+	defaultInventoryMaxItems = 1500
+	maxInventoryMaxItems     = 100000
+)
+
 // Config es la configuración del agente. Se carga de un fichero TOML
 // (config.toml) con override por variables de entorno. Cada campo del
 // fichero se mapea por nombre (ver config.example.toml).
 type Config struct {
-	ServerURL            string   `toml:"serverUrl"`
-	AgentKey             string   `toml:"agentKey"`
-	IntervalSec          int      `toml:"intervalSec"`
-	Collectors           []string `toml:"collectors"`
-	BufferPath           string   `toml:"bufferPath"`
+	ServerURL   string   `toml:"serverUrl"`
+	AgentKey    string   `toml:"agentKey"`
+	IntervalSec int      `toml:"intervalSec"`
+	Collectors  []string `toml:"collectors"`
+	BufferPath  string   `toml:"bufferPath"`
 	// InventoryIntervalSec controla la cadencia del escaneo de software,
 	// independiente de IntervalSec (README plan: el inventario no debería
 	// enviarse en cada heartbeat). A diferencia de IntervalSec, el backend
 	// no puede ajustarlo vía nextIntervalSec: es solo config local.
 	InventoryIntervalSec int `toml:"inventoryIntervalSec"`
+
+	// BufferMaxItems es cuántos heartbeats aplazados retiene el buffer en
+	// disco cuando el backend no responde. Deja de estar escrito a fuego en
+	// agent.New porque el valor correcto depende del despliegue: un servidor
+	// de producción con una ventana de mantenimiento larga y un portátil que
+	// se suspende cada noche no tienen por qué guardar lo mismo.
+	//
+	// El techo real no lo pone este número, sino la ventana de backfill del
+	// backend (features.hygeia.limits.maxBackfillSec): un payload más viejo
+	// que eso se rechaza al drenar, por muy bien guardado que estuviera.
+	BufferMaxItems int `toml:"bufferMaxItems"`
+
+	// InventoryMaxItems acota cuántas aplicaciones se reportan por escaneo.
+	// Debe quedar por debajo del tope del backend: pasarse cuesta el
+	// heartbeat entero, no solo el inventario.
+	InventoryMaxItems int `toml:"inventoryMaxItems"`
 
 	// path recuerda de dónde se cargó, para que Save() reescriba el mismo
 	// fichero sin que el caller tenga que arrastrar la ruta.
@@ -89,6 +131,8 @@ func Load(path string) (*Config, error) {
 		BufferPath:           filepath.Join(DataDir(), "buffer.jsonl"),
 		Collectors:           []string{"cpu", "memory", "disk", "network", "processes"},
 		InventoryIntervalSec: 21600, // 6h: el software instalado cambia poco
+		BufferMaxItems:       defaultBufferMaxItems,
+		InventoryMaxItems:    defaultInventoryMaxItems,
 		path:                 path,
 	}
 
@@ -120,6 +164,21 @@ func Load(path string) (*Config, error) {
 	}
 	if c.InventoryIntervalSec > maxInventoryIntervalSec {
 		c.InventoryIntervalSec = maxInventoryIntervalSec
+	}
+	if c.BufferMaxItems <= 0 {
+		c.BufferMaxItems = defaultBufferMaxItems
+	}
+	// Tope defensivo, del mismo tipo que el de intervalSec: un typo tipo
+	// "bufferMaxItems = 10000000" llenaría el disco del activo justo cuando
+	// el backend está caído y nadie lo está mirando.
+	if c.BufferMaxItems > maxBufferMaxItems {
+		c.BufferMaxItems = maxBufferMaxItems
+	}
+	if c.InventoryMaxItems <= 0 {
+		c.InventoryMaxItems = defaultInventoryMaxItems
+	}
+	if c.InventoryMaxItems > maxInventoryMaxItems {
+		c.InventoryMaxItems = maxInventoryMaxItems
 	}
 	if c.ServerURL == "" {
 		return nil, fmt.Errorf("config: serverUrl es obligatorio (fichero %q o HYGEIA_SERVER_URL)", path)
@@ -196,6 +255,20 @@ func applyEnv(c *Config) error {
 			return fmt.Errorf("config: HYGEIA_INVENTORY_INTERVAL_SEC inválido: %w", err)
 		}
 		c.InventoryIntervalSec = n
+	}
+	if v := os.Getenv("HYGEIA_BUFFER_MAX_ITEMS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: HYGEIA_BUFFER_MAX_ITEMS inválido: %w", err)
+		}
+		c.BufferMaxItems = n
+	}
+	if v := os.Getenv("HYGEIA_INVENTORY_MAX_ITEMS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: HYGEIA_INVENTORY_MAX_ITEMS inválido: %w", err)
+		}
+		c.InventoryMaxItems = n
 	}
 	return nil
 }

@@ -5,9 +5,9 @@ import (
 	"math"
 	"time"
 
+	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 	gpscpu "github.com/shirou/gopsutil/v4/cpu"
 	gpsload "github.com/shirou/gopsutil/v4/load"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
 )
 
 type CPUCollector struct{}
@@ -39,7 +39,7 @@ func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 	}
 
 	out := &payload.CPUMetrics{
-		UsagePct:   round1(global),
+		UsagePct:   roundPct(global),
 		PerCorePct: perCore,
 	}
 
@@ -55,12 +55,26 @@ func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 
 func sampleInterval() time.Duration { return time.Second }
 
-// round1 redondea a 1 decimal. NaN/±Inf se devuelven como 0: el cast a
-// int64 de un valor no finito es indefinido en Go, y ningún colector
-// debería propagar un dato así al payload (plan §12.2, Tier 2).
-func round1(v float64) float64 {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
+// roundPct redondea un porcentaje a 1 decimal y lo ACOTA a [0, 100].
+//
+// El recorte no es cosmético. El schema de ingesta del backend valida cada
+// porcentaje con Range(min=0, max=100) y, si uno solo se sale, rechaza el
+// heartbeat ENTERO con un error de validación (422) que el shipper clasifica
+// como permanente — o sea: el ciclo completo se descarta, no se guarda en el
+// buffer, y el activo se queda mudo. Un salto de reloj, una hibernación o un
+// contador que da la vuelta pueden producir un valor fuera de rango aunque la
+// fórmula que lo calcula sea correcta, así que se corta aquí, en el único
+// punto por el que pasan TODOS los porcentajes del payload (CPU, memoria,
+// swap, disco y procesos).
+//
+// NaN se devuelve como 0 y ±Inf cae en los cortes de rango: el cast a int64
+// de un valor no finito es indefinido en Go (plan §12.2, Tier 2).
+func roundPct(v float64) float64 {
+	if math.IsNaN(v) || v < 0 {
 		return 0
+	}
+	if v > 100 {
+		return 100
 	}
 	return float64(int64(v*10+0.5)) / 10
 }

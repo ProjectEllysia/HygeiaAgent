@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
@@ -280,5 +283,225 @@ func TestDrainBufferDropsPermanentlyRejectedPayload(t *testing.T) {
 
 	if got := a.buf.Len(); got != 0 {
 		t.Errorf("buf.Len() tras drenar un rechazo permanente = %d, se esperaba 0 (descartado, no reencolado)", got)
+	}
+}
+
+// newDrainTestAgent monta un agente apuntando a `srv` con un intervalo dado,
+// para poder fijar el presupuesto de drenado (drainBudget = intervalo / 2).
+func newDrainTestAgent(t *testing.T, serverURL string, intervalSec int) *Agent {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	body := "serverUrl = \"" + serverURL + "\"\nagentKey = \"" + testKey + "\"\n" +
+		"intervalSec = " + strconv.Itoa(intervalSec) + "\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HYGEIA_DATA_DIR", dir)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	return New(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+}
+
+// El bug de A-03: el drenado enviaba los payloads en bucle cerrado, el
+// backend respondía 429 por su suelo de cadencia, el shipper lo trataba como
+// transitorio y gastaba el backoff exponencial completo — unos 7 s por
+// payload — dentro del bucle del ticker. Con el buffer lleno eso dejaba al
+// agente sin recolectar durante horas.
+//
+// Ahora el 429 llega como ThrottledError y el drenado se retira en cuanto la
+// espera no cabe en el presupuesto del ciclo. Con un intervalo de 2 s el
+// presupuesto es 1 s, y la espera que pide el backend (5 s) no cabe: debe
+// volver de inmediato, sin dormir, y sin perder el payload.
+func TestDrainBufferBacksOffOnThrottleWithoutBlocking(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"details":{"min_interval_sec":5}}`))
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 2) // presupuesto de drenado: 1 s
+
+	for i := 0; i < 3; i++ {
+		if err := a.buf.Push(&payload.Payload{AgentVersion: "test"}); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+	}
+
+	start := time.Now()
+	a.drainBuffer(context.Background(), a.shp)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Errorf("drainBuffer tardó %v; debe retirarse en cuanto la espera no cabe en el presupuesto", elapsed)
+	}
+	// Una sola petición: en cuanto el backend dice "espera 5 s" y eso no cabe,
+	// no tiene sentido probar con el siguiente payload — el suelo es por clave
+	// de agente, no por payload.
+	if got := calls.Load(); got != 1 {
+		t.Errorf("el backend recibió %d peticiones, se esperaba 1", got)
+	}
+	// Y sobre todo: no se pierde nada. Los tres siguen en el buffer.
+	if got := a.buf.Len(); got != 3 {
+		t.Errorf("buf.Len() = %d, se esperaba 3 (el payload aplazado vuelve a la cola)", got)
+	}
+}
+
+// Con presupuesto suficiente, el drenado sí espera el suelo de cadencia y
+// entrega. Es la otra mitad del contrato: acotado no significa parado.
+func TestDrainBufferWaitsOutThrottleWhenBudgetAllows(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// El primer intento choca con el suelo; el segundo, ya acompasado,
+		// se acepta.
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"details":{"min_interval_sec":1}}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "nextIntervalSec": 15})
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 10) // presupuesto: 5 s, cabe la espera de 1 s
+
+	if err := a.buf.Push(&payload.Payload{AgentVersion: "test"}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	a.drainBuffer(context.Background(), a.shp)
+
+	if got := calls.Load(); got != 2 {
+		t.Errorf("el backend recibió %d peticiones, se esperaban 2 (rechazo + entrega tras esperar)", got)
+	}
+	if got := a.buf.Len(); got != 0 {
+		t.Errorf("buf.Len() = %d, se esperaba 0 (entregado tras respetar el suelo)", got)
+	}
+}
+
+// El drenado nunca puede monopolizar el ciclo: aunque el backend acepte todo
+// sin rechistar, se para en maxDrainPerCycle y deja el resto para el ciclo
+// siguiente. Antes vaciaba el buffer entero en un solo tick.
+func TestDrainBufferStopsAtMaxPerCycle(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "nextIntervalSec": 15})
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 60)
+
+	const queued = maxDrainPerCycle + 3
+	for i := 0; i < queued; i++ {
+		if err := a.buf.Push(&payload.Payload{AgentVersion: "test"}); err != nil {
+			t.Fatalf("Push: %v", err)
+		}
+	}
+
+	a.drainBuffer(context.Background(), a.shp)
+
+	if got := calls.Load(); got != maxDrainPerCycle {
+		t.Errorf("se enviaron %d payloads, se esperaba el tope de %d", got, maxDrainPerCycle)
+	}
+	if got, want := a.buf.Len(), queued-maxDrainPerCycle; got != want {
+		t.Errorf("buf.Len() = %d, se esperaba %d (el resto espera al próximo ciclo)", got, want)
+	}
+}
+
+// El backend acota el inventario (maxInventoryItems=2000) y pasarse no cuesta
+// el inventario: cuesta el heartbeat ENTERO, con un error de validación que
+// el shipper clasifica como permanente. Como el escaneo se repite cada pocas
+// horas con el mismo tamaño, ese activo perdía un heartbeat cada pocas horas
+// para siempre y nunca llegaba a tener inventario.
+func TestCapInventoryTruncatesToTheConfiguredMaximum(t *testing.T) {
+	t.Setenv("HYGEIA_INVENTORY_MAX_ITEMS", "3")
+	a, _ := newTestAgent(t, testKey)
+
+	inv := payload.Inventory{Software: []payload.Software{
+		{Name: "Zulu"}, {Name: "Alfa"}, {Name: "Mike"}, {Name: "Bravo"}, {Name: "Yankee"},
+	}}
+
+	got := a.capInventory(inv)
+
+	if len(got.Software) != 3 {
+		t.Fatalf("len(Software) = %d, se esperaba 3", len(got.Software))
+	}
+	// Ordenado antes de cortar: sin eso, qué aplicaciones sobreviven depende
+	// del orden de enumeración del registro y parpadearía entre escaneos.
+	want := []string{"Alfa", "Bravo", "Mike"}
+	for i, name := range want {
+		if got.Software[i].Name != name {
+			t.Errorf("Software[%d].Name = %q, se esperaba %q", i, got.Software[i].Name, name)
+		}
+	}
+}
+
+// Un inventario que ya cabe se ordena igual, pero no se toca de tamaño.
+func TestCapInventoryLeavesSmallInventoriesIntact(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	inv := payload.Inventory{Software: []payload.Software{{Name: "Zulu"}, {Name: "Alfa"}}}
+	got := a.capInventory(inv)
+
+	if len(got.Software) != 2 {
+		t.Fatalf("len(Software) = %d, se esperaba 2", len(got.Software))
+	}
+	if got.Software[0].Name != "Alfa" {
+		t.Errorf("Software[0].Name = %q, se esperaba %q", got.Software[0].Name, "Alfa")
+	}
+}
+
+// El inventario se adjunta a UN payload y se limpia. Si ese payload concreto
+// muere por un rechazo permanente —que casi nunca tiene que ver con el
+// inventario: reloj desincronizado, un porcentaje fuera de rango…— el
+// inventario se iba con él y el activo se quedaba sin inventario hasta el
+// siguiente escaneo, horas después.
+func TestPermanentRejectRestoresTheInventoryForTheNextHeartbeat(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.mu.Lock()
+	a.lastInventory = &payload.Inventory{Software: []payload.Software{{Name: "7-Zip"}}}
+	a.mu.Unlock()
+
+	a.runOnce(context.Background())
+
+	a.mu.Lock()
+	restored := a.lastInventory
+	a.mu.Unlock()
+
+	if restored == nil {
+		t.Fatal("lastInventory = nil tras un rechazo permanente; el inventario se perdió")
+	}
+	if len(restored.Software) != 1 || restored.Software[0].Name != "7-Zip" {
+		t.Errorf("lastInventory = %+v, se esperaba el inventario original", restored)
+	}
+}
+
+// Reponer no debe pisar un escaneo más reciente: si inventoryLoop dejó otro
+// mientras el envío estaba en curso, manda el nuevo.
+func TestRestoreInventoryDoesNotOverwriteANewerScan(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	fresh := &payload.Inventory{Software: []payload.Software{{Name: "nuevo"}}}
+	a.mu.Lock()
+	a.lastInventory = fresh
+	a.mu.Unlock()
+
+	a.restoreInventory(&payload.Inventory{Software: []payload.Software{{Name: "viejo"}}})
+
+	a.mu.Lock()
+	got := a.lastInventory
+	a.mu.Unlock()
+	if got != fresh {
+		t.Errorf("lastInventory = %+v, se esperaba el escaneo más reciente", got)
 	}
 }

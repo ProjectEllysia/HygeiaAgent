@@ -35,6 +35,58 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.InventoryIntervalSec != 21600 {
 		t.Errorf("InventoryIntervalSec = %d, want %d", cfg.InventoryIntervalSec, 21600)
 	}
+	if cfg.BufferMaxItems != defaultBufferMaxItems {
+		t.Errorf("BufferMaxItems = %d, want %d", cfg.BufferMaxItems, defaultBufferMaxItems)
+	}
+}
+
+func TestLoad_BufferMaxItemsEnvOverride(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_BUFFER_MAX_ITEMS", "250")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.BufferMaxItems != 250 {
+		t.Errorf("BufferMaxItems = %d, want %d", cfg.BufferMaxItems, 250)
+	}
+}
+
+// Cero o negativo significan "no lo he configurado", no "buffer desactivado":
+// un buffer de tamaño cero descartaría en silencio todo lo que no se pueda
+// enviar, que es justo lo contrario de lo que el buffer existe para evitar.
+func TestLoad_BufferMaxItemsNonPositiveFallsBackToDefault(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+
+	for _, v := range []string{"0", "-5"} {
+		t.Setenv("HYGEIA_BUFFER_MAX_ITEMS", v)
+		cfg, err := Load("nonexistent.toml")
+		if err != nil {
+			t.Fatalf("Load() con %q = %v", v, err)
+		}
+		if cfg.BufferMaxItems != defaultBufferMaxItems {
+			t.Errorf("BufferMaxItems con %q = %d, want %d", v, cfg.BufferMaxItems, defaultBufferMaxItems)
+		}
+	}
+}
+
+// Un typo no debe poder llenar el disco del activo justo mientras el backend
+// está caído y nadie está mirando.
+func TestLoad_BufferMaxItemsAboveCeilingIsClamped(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_BUFFER_MAX_ITEMS", "10000000")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.BufferMaxItems != maxBufferMaxItems {
+		t.Errorf("BufferMaxItems = %d, want %d (techo)", cfg.BufferMaxItems, maxBufferMaxItems)
+	}
 }
 
 func TestLoad_InventoryIntervalEnvOverride(t *testing.T) {
@@ -194,5 +246,43 @@ collectors = ["cpu", "memory"]
 	}
 	if cfg.ServerURL != "http://toml:8080" {
 		t.Errorf("ServerURL = %q, want %q", cfg.ServerURL, "http://toml:8080")
+	}
+}
+
+// El tope del inventario debe quedar por debajo del del backend
+// (maxInventoryItems, 2000): pasarse no cuesta el inventario, cuesta el
+// heartbeat entero.
+func TestLoad_InventoryMaxItemsDefaultsBelowBackendCeiling(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryMaxItems != defaultInventoryMaxItems {
+		t.Errorf("InventoryMaxItems = %d, want %d", cfg.InventoryMaxItems, defaultInventoryMaxItems)
+	}
+	// El tope del backend en SecOpsConfig.json. Si alguien sube este default
+	// por encima, el heartbeat entero empieza a rebotar en cuanto un equipo
+	// tenga suficientes aplicaciones.
+	const backendCeiling = 2000
+	if cfg.InventoryMaxItems >= backendCeiling {
+		t.Errorf("InventoryMaxItems = %d, debe quedar por debajo del tope del backend (%d)",
+			cfg.InventoryMaxItems, backendCeiling)
+	}
+}
+
+func TestLoad_InventoryMaxItemsEnvOverride(t *testing.T) {
+	t.Setenv("HYGEIA_SERVER_URL", "http://localhost:8080")
+	t.Setenv("HYGEIA_AGENT_KEY", "test-key")
+	t.Setenv("HYGEIA_INVENTORY_MAX_ITEMS", "500")
+
+	cfg, err := Load("nonexistent.toml")
+	if err != nil {
+		t.Fatalf("Load() = %v", err)
+	}
+	if cfg.InventoryMaxItems != 500 {
+		t.Errorf("InventoryMaxItems = %d, want 500", cfg.InventoryMaxItems)
 	}
 }
