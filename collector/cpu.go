@@ -125,12 +125,23 @@ func deltaPct(prev, cur gpscpu.TimesStat) float64 {
 }
 
 func busy(t gpscpu.TimesStat) (total, busy float64) {
-	total = t.Total()
+	total = cpuTotal(t)
 	if runtime.GOOS == "linux" {
 		total -= t.Guest
 		total -= t.GuestNice
 	}
 	return total, total - t.Idle - t.Iowait
+}
+
+// cpuTotal suma todos los contadores de tiempo de un núcleo.
+//
+// Sustituye a gpscpu.TimesStat.Total(), que gopsutil marcó como deprecated
+// por tratarse de un detalle interno suyo. Sumarlo aquí, además de quitar la
+// dependencia de una API que puede desaparecer, deja explícito qué entra en
+// el total — que es justo lo que busy() necesita saber para restar después.
+func cpuTotal(t gpscpu.TimesStat) float64 {
+	return t.User + t.System + t.Idle + t.Nice + t.Iowait +
+		t.Irq + t.Softirq + t.Steal + t.Guest + t.GuestNice
 }
 
 func sampleInterval() time.Duration { return time.Second }

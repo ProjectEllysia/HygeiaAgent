@@ -34,17 +34,17 @@ type Inventory struct {
 }
 
 type Software struct {
-	Name    		string `json:"name"`
-	Type 			string `json:"type"`
-	Vendor 			string `json:"vendor"`
-	Version 		string `json:"version"`
-	GUID  			string `json:"guid"`
-	InstalledAt 	time.Time `json:"installedAt"`
-	InstallPath 	string `json:"installPath"`
-	Architecture 	string `json:"architecture"`
-	SizeBytes 		uint64 `json:"sizeBytes"`
-	Status 			string `json:"status"`
-	Source 			string `json:"source"`
+	Name         string    `json:"name"`
+	Type         string    `json:"type"`
+	Vendor       string    `json:"vendor"`
+	Version      string    `json:"version"`
+	GUID         string    `json:"guid"`
+	InstalledAt  time.Time `json:"installedAt"`
+	InstallPath  string    `json:"installPath"`
+	Architecture string    `json:"architecture"`
+	SizeBytes    uint64    `json:"sizeBytes"`
+	Status       string    `json:"status"`
+	Source       string    `json:"source"`
 }
 
 // Metrics agrupa todas las familias de métricas. Los punteros/slices se

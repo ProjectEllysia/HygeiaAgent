@@ -206,7 +206,7 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 		} else {
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				r, derr := decodeResponse(resp.Body)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				if derr != nil {
 					return nil, fmt.Errorf("shipper: decode respuesta: %w", derr)
 				}
@@ -219,10 +219,10 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 			// el caller, que sabe si le queda presupuesto de ciclo.
 			if resp.StatusCode == http.StatusTooManyRequests {
 				throttled := newThrottledError(resp)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				return nil, throttled
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if isPermanentStatus(resp.StatusCode) {
 				// Sin reintentos: el status ya dice que el payload nunca
 				// va a pasar, reintentar solo gasta el backoff para nada.

@@ -36,8 +36,7 @@ func enable() error {
 	if err != nil {
 		return fmt.Errorf("autostart: abriendo la clave Run: %w", err)
 	}
-	defer k.Close()
-
+	defer func() { _ = k.Close() }()
 	// Entrecomillado: la ruta casi siempre contiene espacios
 	// (C:\Program Files\…) y sin comillas el shell la partiría.
 	if err := k.SetStringValue(AppName, `"`+exe+`"`); err != nil {
@@ -54,8 +53,7 @@ func disable() error {
 		}
 		return fmt.Errorf("autostart: abriendo la clave Run: %w", err)
 	}
-	defer k.Close()
-
+	defer func() { _ = k.Close() }()
 	if err := k.DeleteValue(AppName); err != nil && !errors.Is(err, registry.ErrNotExist) {
 		return fmt.Errorf("autostart: borrando la entrada de arranque: %w", err)
 	}
@@ -70,8 +68,7 @@ func enabled() (bool, error) {
 		}
 		return false, fmt.Errorf("autostart: abriendo la clave Run: %w", err)
 	}
-	defer k.Close()
-
+	defer func() { _ = k.Close() }()
 	if _, _, err := k.GetStringValue(AppName); err != nil {
 		if errors.Is(err, registry.ErrNotExist) {
 			return false, nil

@@ -58,7 +58,7 @@ func getInstalledSoftware() ([]payload.Software, error) {
 		}
 
 		subKeyNames, err := key.ReadSubKeyNames(-1)
-		key.Close()
+		_ = key.Close()
 		if err != nil {
 			continue
 		}
@@ -80,7 +80,7 @@ func readSoftwareEntry(root registry.Key, basePath, guid, arch string) (payload.
 	if err != nil {
 		return payload.Software{}, false
 	}
-	defer entryKey.Close()
+	defer func() { _ = entryKey.Close() }()
 
 	name, _, err := entryKey.GetStringValue("DisplayName")
 	if err != nil || name == "" {

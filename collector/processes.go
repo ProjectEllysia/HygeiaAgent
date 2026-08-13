@@ -131,7 +131,7 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 
 		var cpuPct float64
 		if cput, err := p.TimesWithContext(ctx); err == nil {
-			total := cput.Total()
+			total := cpuTotal(*cput)
 			newCPU[p.Pid] = total
 			if haveBaseline {
 				if prev, ok := prevCPU[p.Pid]; ok && total >= prev {

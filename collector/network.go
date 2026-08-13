@@ -5,14 +5,14 @@ import (
 	"sync"
 	"time"
 
-	gpsnet "github.com/shirou/gopsutil/v4/net"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	gpsnet "github.com/shirou/gopsutil/v4/net"
 )
 
 type NetworkCollector struct {
-	mu        sync.Mutex
-	prev      map[string]gpsnet.IOCountersStat
-	prevTime  time.Time
+	mu       sync.Mutex
+	prev     map[string]gpsnet.IOCountersStat
+	prevTime time.Time
 }
 
 func NewNetwork() Collector { return &NetworkCollector{prev: make(map[string]gpsnet.IOCountersStat)} }

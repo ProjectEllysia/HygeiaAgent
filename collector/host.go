@@ -4,8 +4,8 @@ import (
 	"os"
 	"runtime"
 
-	gpshost "github.com/shirou/gopsutil/v4/host"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	gpshost "github.com/shirou/gopsutil/v4/host"
 )
 
 // Host rellena la parte identificativa del payload (README §9, "host").

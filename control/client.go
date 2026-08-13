@@ -37,7 +37,7 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 	if err != nil {
 		return fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("control: %s devolvió %d", path, resp.StatusCode)
 	}
@@ -88,8 +88,7 @@ func (c *Client) Enroll(ctx context.Context, agentKey string) error {
 	if err != nil {
 		return fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() { _ = resp.Body.Close() }()
 	var er EnrollResponse
 	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
 		return fmt.Errorf("control: respuesta ilegible del servicio (status %d)", resp.StatusCode)
@@ -115,8 +114,7 @@ func (c *Client) Reset(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("control: no se puede hablar con el servicio: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() { _ = resp.Body.Close() }()
 	var rr ResetResponse
 	if err := json.NewDecoder(resp.Body).Decode(&rr); err != nil {
 		return fmt.Errorf("control: respuesta ilegible del servicio (status %d)", resp.StatusCode)
