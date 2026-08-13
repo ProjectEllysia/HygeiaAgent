@@ -375,8 +375,27 @@ En total, unas cuatro o cinco operaciones de lectura por proceso, cuando bastan 
 
 1. **Sacar la memoria total del bucle.** Llamar a `mem.VirtualMemoryWithContext` una sola vez
    antes de recorrer los procesos y usar `p.MemoryInfoWithContext(ctx).RSS / total` dentro. Es
-   el mismo cálculo, con una consulta en lugar de N. Este solo cambio elimina en torno al
-   cuarenta por ciento del coste del recolector.
+   el mismo cálculo, con una consulta en lugar de N.
+
+> **Medición posterior (implementado el 13 de agosto de 2026).** La estimación original de
+> este apartado —"en torno al cuarenta por ciento"— era demasiado optimista y solo vale para
+> Linux. Con el benchmark `BenchmarkProcessCollectorCollect`, medido antes y después:
+>
+> | Sistema | Antes (mediana) | Después (mediana) | Cambio |
+> |---|---|---|---|
+> | Linux, 27 procesos | 2,64 ms | 2,17 ms | **−18 %** |
+> | Windows, ~250 procesos | 25,4 ms | 26,3 ms | sin cambio (dentro del ruido) |
+>
+> El motivo de la diferencia es que el coste que se elimina no es el mismo en los dos
+> sistemas. En Linux, `MemoryPercent` provoca una lectura de `/proc/meminfo` por proceso, y
+> eso sí es caro. En Windows, la llamada equivalente es `GlobalMemoryStatusEx`, que es
+> barata, y `StatusWithContext` ni siquiera llega a hacer una llamada al sistema porque
+> `gopsutil` devuelve "no implementado" de inmediato. En Windows, el coste dominante está en
+> `ProcessesWithContext` y en abrir un manejador por proceso, que este cambio no toca.
+>
+> El cambio se conserva porque es una mejora clara donde importa (servidores Linux, donde
+> además el ahorro crece con el número de procesos) y no empeora nada en Windows. Pero la
+> cifra del cuarenta por ciento era una estimación de despacho, no una medida.
 2. **No pedir el estado del proceso en Windows.** El contador de zombis solo tiene sentido en
    sistemas de tipo Unix. Se puede resolver con una variable a nivel de paquete definida por
    sistema operativo (el repositorio ya usa ese patrón para `inventory_*.go`), de modo que en
