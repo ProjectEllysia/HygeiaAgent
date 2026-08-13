@@ -25,6 +25,11 @@ import (
 // porque el original (716x766, 118 KB) es innecesariamente grande para un
 // icono de 16-48 px.
 //
+// Lo genera ./gen a partir del arte de resources/. La directiva deja esa
+// relación explícita: `go generate ./...` regenera el arte derivado sin que
+// nadie tenga que acordarse del comando.
+//
+//go:generate go run ./gen
 //go:embed hygeia-mark.png
 var hygeiaMark []byte
 
