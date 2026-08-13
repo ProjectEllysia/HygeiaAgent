@@ -383,22 +383,41 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 		a.setState(control.StateLocalError, err)
 		return 0
 	}
-	a.log.Info("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
+	// Debug y no Info: el heartbeat correcto es el caso normal, y una línea
+	// cada 15 s son ~5.800 al día por equipo que no dicen nada que no diga ya
+	// lastPushAt. Lo que sí se registra siempre es el CAMBIO de estado, que
+	// es lo que de verdad se busca al abrir el log (ver setState).
+	a.log.Debug("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
 	a.setState(control.StateConnected, nil)
 	a.markPush()
 	a.drainBuffer(ctx, shp)
 	return time.Duration(resp.NextIntervalSec) * time.Second
 }
 
+// setState actualiza el estado observable y registra las TRANSICIONES.
+//
+// Solo los cambios: repetir "conectado" cada 15 segundos no informa de nada,
+// mientras que "pasó de conectado a error local" a las 03:14 es exactamente
+// lo que se busca al abrir el log de un agente que dio problemas.
 func (a *Agent) setState(state string, err error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	previous := a.state
 	a.state = state
 	if err != nil {
 		a.lastError = err.Error()
 	} else {
 		a.lastError = ""
 	}
+	a.mu.Unlock()
+
+	if previous == state {
+		return
+	}
+	if err != nil {
+		a.log.Warn("cambio de estado", "de", previous, "a", state, "err", err)
+		return
+	}
+	a.log.Info("cambio de estado", "de", previous, "a", state)
 }
 
 // restoreInventory devuelve a la cola el inventario que viajaba en un payload
@@ -490,53 +509,70 @@ const drainBudgetFraction = 2
 func (a *Agent) drainBuffer(ctx context.Context, shp *shipper.Shipper) {
 	deadline := time.Now().Add(a.drainBudget())
 
-	for sent := 0; sent < maxDrainPerCycle; {
+	// Se extraen todos los del ciclo de una vez: cada extracción cuesta una
+	// lectura y una reescritura del fichero, así que sacarlos de uno en uno
+	// multiplicaba ese coste por el número de payloads (A-07).
+	batch, err := a.buf.PopBatch(maxDrainPerCycle)
+	if err != nil {
+		return // buffer vacío (io.EOF) o ilegible: nada que drenar
+	}
+
+	var permErr *shipper.PermanentError
+	var thrErr *shipper.ThrottledError
+
+	for i := 0; i < len(batch); {
 		if !time.Now().Before(deadline) {
+			a.requeue(batch[i:])
 			a.log.Debug("presupuesto de drenado agotado, sigue en el próximo ciclo",
-				"enviados", sent, "pendientes", a.buf.Len())
+				"enviados", i, "pendientes", a.buf.Len())
 			return
 		}
 
-		p, err := a.buf.Pop()
-		if err != nil {
-			return // buffer vacío (io.EOF) o ilegible: nada que drenar
-		}
+		_, err := shp.Send(ctx, batch[i])
+		switch {
+		case err == nil:
+			i++
 
-		if _, err := shp.Send(ctx, p); err != nil {
-			var permErr *shipper.PermanentError
-			if errors.As(err, &permErr) {
-				// Este payload en concreto nunca va a pasar (esquema, reloj
-				// caducado, tamaño) — descartarlo y seguir con el resto de
-				// la cola, no reencolarlo para que dé vueltas para siempre
-				// (el bug real: 9 payloads de horas de antigüedad atascados
-				// sin bajar nunca del buffer).
-				a.log.Warn("payload en buffer rechazado de forma permanente, descartando", "err", err)
-				continue
+		case errors.As(err, &permErr):
+			// Este payload en concreto nunca va a pasar (esquema, reloj
+			// caducado, tamaño) — descartarlo y seguir con el resto de la
+			// cola, no reencolarlo para que dé vueltas para siempre (el bug
+			// real: 9 payloads de horas de antigüedad atascados sin bajar
+			// nunca del buffer).
+			a.log.Warn("payload en buffer rechazado de forma permanente, descartando", "err", err)
+			i++
+
+		case errors.As(err, &thrErr):
+			// El payload es válido, solo llegó demasiado pronto. Se espera el
+			// suelo y se reintenta ESTE mismo (no se incrementa i). Si la
+			// espera no cabe en el presupuesto, lo que queda vuelve a la cola
+			// y se sigue en el ciclo siguiente.
+			if !a.waitWithin(ctx, thrErr.RetryAfter, deadline) {
+				a.requeue(batch[i:])
+				a.log.Debug("drenado en pausa por cadencia del backend",
+					"espera", thrErr.RetryAfter, "pendientes", a.buf.Len())
+				return
 			}
 
-			var thrErr *shipper.ThrottledError
-			if errors.As(err, &thrErr) {
-				// El payload es válido, solo llegó demasiado pronto: vuelve a
-				// la cola y se espera el suelo. Reencolar por el final lo
-				// manda al fondo, y da igual: los payloads son independientes
-				// entre sí y el backend ordena la serie por received_at, no
-				// por el orden en que se entregan.
-				_ = a.buf.Push(p)
-				if !a.waitWithin(ctx, thrErr.RetryAfter, deadline) {
-					a.log.Debug("drenado en pausa por cadencia del backend",
-						"espera", thrErr.RetryAfter, "pendientes", a.buf.Len())
-					return
-				}
-				continue
-			}
-
+		default:
 			a.log.Warn("drenado interrumpido, reintentará más tarde", "err", err)
-			// devolver el payload al buffer para no perderlo: reintento en el
-			// próximo ciclo exitoso.
-			_ = a.buf.Push(p)
+			a.requeue(batch[i:])
 			return
 		}
-		sent++
+	}
+}
+
+// requeue devuelve al buffer los payloads que no llegaron a enviarse, para no
+// perderlos.
+//
+// Vuelven por el final de la cola, no por donde estaban. Da igual: los
+// payloads son independientes entre sí y el backend ordena la serie temporal
+// por received_at, su propio reloj, no por el orden en que se los entregan.
+func (a *Agent) requeue(ps []*payload.Payload) {
+	for _, p := range ps {
+		if err := a.buf.Push(p); err != nil {
+			a.log.Error("no se pudo devolver un payload al buffer", "err", err)
+		}
 	}
 }
 

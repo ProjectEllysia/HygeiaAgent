@@ -375,8 +375,27 @@ En total, unas cuatro o cinco operaciones de lectura por proceso, cuando bastan 
 
 1. **Sacar la memoria total del bucle.** Llamar a `mem.VirtualMemoryWithContext` una sola vez
    antes de recorrer los procesos y usar `p.MemoryInfoWithContext(ctx).RSS / total` dentro. Es
-   el mismo cálculo, con una consulta en lugar de N. Este solo cambio elimina en torno al
-   cuarenta por ciento del coste del recolector.
+   el mismo cálculo, con una consulta en lugar de N.
+
+> **Medición posterior (implementado el 13 de agosto de 2026).** La estimación original de
+> este apartado —"en torno al cuarenta por ciento"— era demasiado optimista y solo vale para
+> Linux. Con el benchmark `BenchmarkProcessCollectorCollect`, medido antes y después:
+>
+> | Sistema | Antes (mediana) | Después (mediana) | Cambio |
+> |---|---|---|---|
+> | Linux, 27 procesos | 2,64 ms | 2,17 ms | **−18 %** |
+> | Windows, ~250 procesos | 25,4 ms | 26,3 ms | sin cambio (dentro del ruido) |
+>
+> El motivo de la diferencia es que el coste que se elimina no es el mismo en los dos
+> sistemas. En Linux, `MemoryPercent` provoca una lectura de `/proc/meminfo` por proceso, y
+> eso sí es caro. En Windows, la llamada equivalente es `GlobalMemoryStatusEx`, que es
+> barata, y `StatusWithContext` ni siquiera llega a hacer una llamada al sistema porque
+> `gopsutil` devuelve "no implementado" de inmediato. En Windows, el coste dominante está en
+> `ProcessesWithContext` y en abrir un manejador por proceso, que este cambio no toca.
+>
+> El cambio se conserva porque es una mejora clara donde importa (servidores Linux, donde
+> además el ahorro crece con el número de procesos) y no empeora nada en Windows. Pero la
+> cifra del cuarenta por ciento era una estimación de despacho, no una medida.
 2. **No pedir el estado del proceso en Windows.** El contador de zombis solo tiene sentido en
    sistemas de tipo Unix. Se puede resolver con una variable a nivel de paquete definida por
    sistema operativo (el repositorio ya usa ese patrón para `inventory_*.go`), de modo que en
@@ -427,6 +446,19 @@ heartbeat sin datos de CPU sería rechazado. La forma limpia de resolverlo es qu
 ciclo siga usando el muestreo bloqueante y los siguientes usen diferencias — o, más simple,
 que el agente tome la muestra base durante el jitter de arranque, que ya existe y ya espera.
 
+> **Medición posterior (implementado el 13 de agosto de 2026).** Se eligió la primera opción:
+> el primer ciclo sigue muestreando bloqueando (una vez en la vida del proceso) y a partir del
+> segundo se calcula por diferencia. Medido sobre `agent.collectPayload`, que es el ciclo de
+> recolección completo con todos los colectores en paralelo:
+>
+> | | Antes | Después |
+> |---|---|---|
+> | Duración de un ciclo de recolección | 1 001 ms | 27,5 ms |
+>
+> Es una reducción de unas **36 veces**, y deja claro que el segundo de bloqueo del recolector
+> de CPU no era *parte* del coste del ciclo: era prácticamente **todo** el coste del ciclo.
+> Los otros cuatro colectores juntos suman menos de treinta milisegundos.
+
 ---
 
 #### `A-07` — El buffer en disco reescribe el fichero completo en cada operación, incluso al contarlo
@@ -473,8 +505,27 @@ disco. Tres cambios sencillos, en orden de importancia:
    hacer por lotes: en lugar de recortar un elemento cada vez, recortar el diez por ciento
    cuando se llegue al tope. Así el coste amortizado por `Push` es constante.
 
-Con esos tres cambios, el buffer pasa de cuadrático a lineal sin cambiar su formato en disco ni
-sus garantías, y las pruebas existentes en `buffer/buffer_test.go` siguen siendo válidas.
+Con esos tres cambios, el buffer pasa de cuadrático a lineal sin cambiar su formato en disco.
+
+> **Medición posterior (implementado el 13 de agosto de 2026).** Con los benchmarks
+> `BenchmarkLenOnFullBuffer` y `BenchmarkDrainFullBuffer`, sobre un buffer lleno de mil
+> payloads, medidos antes y después en Windows:
+>
+> | Operación | Antes (mediana) | Después (mediana) | Cambio |
+> |---|---|---|---|
+> | `Len()` | 1,51 ms | 45 ns | **unas 33 000 veces más rápido** |
+> | Drenar los mil payloads | 7,47 s | 1,58 s | **4,7 veces más rápido** |
+>
+> La cifra de `Len()` es la que de verdad importa en el día a día, porque es la que el icono
+> de bandeja provoca cada cinco segundos de forma indefinida: pasa de leer un fichero de tres
+> megabytes a devolver un entero.
+>
+> Una corrección respecto a lo escrito arriba: la afirmación de que "las pruebas existentes
+> siguen siendo válidas" resultó ser falsa. `TestPushEvictsOldestWhenFull` exigía que el
+> buffer nunca superase `maxItems` **exactamente**, y la rotación por lotes tolera a
+> propósito una holgura del diez por ciento antes de compactar. Esa prueba se sustituyó por
+> otra que afirma la propiedad que de verdad se quiere garantizar —crecimiento acotado y
+> descarte del más viejo primero— en lugar del número exacto.
 
 ---
 

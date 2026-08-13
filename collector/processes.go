@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
+	gpsmem "github.com/shirou/gopsutil/v4/mem"
 	gpsproc "github.com/shirou/gopsutil/v4/process"
 )
 
@@ -77,12 +78,24 @@ type procSample struct {
 // bajo ese cálculo — justo el escenario que el §3 pone como ejemplo de por
 // qué existe el top-N (plan §12.1).
 //
-// MemoryPercent no tiene ese problema (RSS actual / total, instantáneo), así
-// que topMem no necesita este tratamiento.
+// El % de memoria se calcula aquí en vez de con Process.MemoryPercent() de
+// gopsutil, que consulta la memoria TOTAL del sistema en cada llamada (ver
+// su implementación: mem.VirtualMemory() + p.MemoryInfo()). En un equipo con
+// trescientos procesos eso son trescientas consultas del mismo dato
+// invariante — en Linux, trescientas lecturas de /proc/meminfo por ciclo.
+// Se lee una vez, fuera del bucle.
 func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 	procs, err := gpsproc.ProcessesWithContext(ctx)
 	if err != nil {
 		return err
+	}
+
+	// La memoria total no cambia durante el ciclo. Si falla, memPct se queda
+	// a cero para todos y el resto del colector sigue: degradar con elegancia
+	// (§5), no tumbar el heartbeat por un dato secundario.
+	var totalMem float64
+	if vm, err := gpsmem.VirtualMemoryWithContext(ctx); err == nil {
+		totalMem = float64(vm.Total)
 	}
 
 	now := time.Now()
@@ -99,13 +112,19 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 	haveBaseline := elapsed > 0 && len(prevCPU) > 0
 
 	newCPU := make(map[int32]float64, len(procs))
-	samples := make([]procSample, 0, len(procs))
+	// Los dos tops se construyen sobre la marcha, quedándose solo con los
+	// topN mayores de cada criterio: no hace falta materializar los cientos
+	// de procesos del equipo ni ordenarlos dos veces para elegir diez.
+	var topCPU, topMem []procSample
 	var zombie uint64
+
 	for _, p := range procs {
-		if status, err := p.StatusWithContext(ctx); err == nil {
-			for _, s := range status {
-				if s == gpsproc.Zombie {
-					zombie++
+		if zombieStatusAvailable {
+			if status, err := p.StatusWithContext(ctx); err == nil {
+				for _, s := range status {
+					if s == gpsproc.Zombie {
+						zombie++
+					}
 				}
 			}
 		}
@@ -121,8 +140,18 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 			}
 		}
 
-		mem, _ := p.MemoryPercentWithContext(ctx)
-		samples = append(samples, procSample{pid: p.Pid, proc: p, cpu: cpuPct, mem: float64(mem)})
+		var memPct float64
+		if totalMem > 0 {
+			if mi, err := p.MemoryInfoWithContext(ctx); err == nil && mi != nil {
+				memPct = 100 * float64(mi.RSS) / totalMem
+			}
+		}
+
+		s := procSample{pid: p.Pid, proc: p, cpu: cpuPct, mem: memPct}
+		if haveBaseline {
+			topCPU = insertTop(topCPU, s, byCPU)
+		}
+		topMem = insertTop(topMem, s, byMem)
 	}
 
 	c.mu.Lock()
@@ -130,39 +159,64 @@ func (c *ProcessCollector) Collect(ctx context.Context, m *payload.Metrics) erro
 	c.prevTime = now
 	c.mu.Unlock()
 
-	topCPU := []payload.ProcessInfo{}
-	if haveBaseline {
-		sort.Slice(samples, func(i, j int) bool { return samples[i].cpu > samples[j].cpu })
-		topCPU = toProcessInfo(ctx, samples, true)
-	}
-
-	sort.Slice(samples, func(i, j int) bool { return samples[i].mem > samples[j].mem })
-	topMem := toProcessInfo(ctx, samples, false)
-
 	m.Processes = &payload.ProcessMetrics{
 		Total:  uint64(len(procs)),
 		Zombie: zombie,
-		TopCPU: topCPU,
-		TopMem: topMem,
+		TopCPU: toProcessInfo(ctx, topCPU, true),
+		TopMem: toProcessInfo(ctx, topMem, false),
 	}
 	return nil
+}
+
+// zombieStatusAvailable: en Windows, gopsutil devuelve siempre
+// ErrNotImplementedError desde StatusWithContext (process_windows.go), así
+// que el recuento de zombis sale cero de todas formas y la llamada solo
+// gasta trabajo por proceso. En sistemas tipo Unix sí es un dato real, y
+// cuesta una lectura de /proc/<pid>/status por proceso, así que se paga solo
+// donde sirve para algo. El concepto de proceso zombi tampoco existe en
+// Windows, de modo que no se pierde nada.
+var zombieStatusAvailable = runtime.GOOS != "windows"
+
+func byCPU(s procSample) float64 { return s.cpu }
+func byMem(s procSample) float64 { return s.mem }
+
+// insertTop mantiene `top` ordenado de mayor a menor con como mucho topN
+// elementos, insertando `s` si entra.
+//
+// Sustituye a dos sort.Slice sobre el vector completo de procesos. Con topN=5
+// una inserción lineal en un vector de cinco es más simple y más barata que
+// un montículo, y sobre todo evita tener que guardar los cientos de procesos
+// del equipo solo para quedarse con diez.
+func insertTop(top []procSample, s procSample, value func(procSample) float64) []procSample {
+	v := value(s)
+	if len(top) == topN && v <= value(top[topN-1]) {
+		return top // no entra: ni siquiera supera al menor de los que ya están
+	}
+
+	i := sort.Search(len(top), func(j int) bool { return value(top[j]) < v })
+	if len(top) < topN {
+		top = append(top, s) // crece una posición; el valor real se coloca abajo
+	}
+	// Desplaza a la derecha desde el punto de inserción. Cuando el vector ya
+	// estaba lleno, esto tira al que ocupaba la última posición.
+	copy(top[i+1:], top[i:len(top)-1])
+	top[i] = s
+	return top
 }
 
 // toProcessInfo lee el nombre solo de los N procesos que ya se sabe que
 // entran en el top, reusando el *process.Process obtenido en Collect en vez
 // de recrearlo por PID (evita una revalidación de existencia redundante;
 // plan §12.2, Tier 2).
-func toProcessInfo(ctx context.Context, samples []procSample, byCPU bool) []payload.ProcessInfo {
-	n := topN
-	if len(samples) < n {
-		n = len(samples)
-	}
-	out := make([]payload.ProcessInfo, 0, n)
-	for i := 0; i < n; i++ {
-		s := samples[i]
+//
+// Nunca devuelve nil aunque `samples` esté vacío: un nil slice serializa a
+// JSON `null` y el schema del backend rechaza null en un campo de lista.
+func toProcessInfo(ctx context.Context, samples []procSample, isCPU bool) []payload.ProcessInfo {
+	out := make([]payload.ProcessInfo, 0, len(samples))
+	for _, s := range samples {
 		name, _ := s.proc.NameWithContext(ctx)
 		pi := payload.ProcessInfo{PID: s.pid, Name: name}
-		if byCPU {
+		if isCPU {
 			pi.CPUPct = roundPct(s.cpu)
 		} else {
 			pi.MemPct = roundPct(s.mem)

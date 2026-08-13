@@ -77,13 +77,19 @@ func (p *program) Stop(service.Service) error {
 }
 
 func main() {
-	log, logRing := newLogger()
+	// El nivel es una LevelVar y no un valor fijo porque el logger tiene que
+	// existir ANTES de cargar la config —si la carga falla, ese error hay que
+	// poder registrarlo— pero el nivel lo decide la propia config. Se arranca
+	// en Info y se ajusta en cuanto se sabe.
+	var level slog.LevelVar
+	log, logRing := newLogger(&level)
 
 	cfg, err := config.Load(config.DefaultPath())
 	if err != nil {
 		log.Error("error cargando configuración", "err", err)
 		os.Exit(1)
 	}
+	level.Set(cfg.SlogLevel())
 
 	svcConfig := &service.Config{
 		Name:        "hygeia-agent",
@@ -138,17 +144,25 @@ const logRingCapacity = 50
 // En paralelo (io.MultiWriter), cada línea también se guarda en un
 // logring.Buffer en memoria, que el canal de control expone por GET /debug
 // — diagnóstico de campo sin depender de encontrar el fichero de log.
-func newLogger() (*slog.Logger, *logring.Buffer) {
+// El fichero se rota al superar maxLogBytes (ver logfile.go): antes se abría
+// en modo añadir y no se rotaba nunca, lo que contradecía el principio del §5
+// de que nada crece sin límite.
+func newLogger(level slog.Leveler) (*slog.Logger, *logring.Buffer) {
 	ring := logring.New(logRingCapacity)
+	opts := &slog.HandlerOptions{Level: level}
+
+	newWith := func(w io.Writer) *slog.Logger {
+		return slog.New(slog.NewTextHandler(io.MultiWriter(w, ring), opts))
+	}
 
 	if service.Interactive() {
-		return slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, ring), nil)), ring
+		return newWith(os.Stderr), ring
 	}
 	logPath := filepath.Join(config.DataDir(), "hygeia-agent.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err == nil {
-		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-			return slog.New(slog.NewTextHandler(io.MultiWriter(f, ring), nil)), ring
+		if f, err := newRotatingWriter(logPath, maxLogBytes); err == nil {
+			return newWith(f), ring
 		}
 	}
-	return slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, ring), nil)), ring
+	return newWith(os.Stderr), ring
 }

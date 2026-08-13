@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -47,24 +48,116 @@ func TestPopEmptyReturnsEOF(t *testing.T) {
 	}
 }
 
-// Al llenarse, el buffer descarta el ítem más viejo (§5: acotado, nunca
-// crece sin límite).
-func TestPushEvictsOldestWhenFull(t *testing.T) {
-	b := NewRingBuffer(filepath.Join(t.TempDir(), "buffer.jsonl"), 3)
-	for _, tag := range []string{"a", "b", "c", "d"} {
+// Al llenarse, el buffer descarta lo más viejo (§5: acotado, nunca crece sin
+// límite).
+//
+// El tope efectivo es maxItems+rotateSlack, no maxItems exacto: compactar en
+// cada Push una vez lleno significaba reescribir el fichero entero cada 15 s
+// durante toda una caída del backend, que es justo el coste que rotateSlack
+// existe para amortizar. Lo que sí se mantiene intacto es la garantía que
+// importa: el crecimiento está acotado y lo que se descarta es siempre lo más
+// viejo.
+func TestPushStaysBoundedAndEvictsOldest(t *testing.T) {
+	const maxItems = 3
+	b := NewRingBuffer(filepath.Join(t.TempDir(), "buffer.jsonl"), maxItems)
+	ceiling := maxItems + b.rotateSlack()
+
+	// Suficientes inserciones para forzar varias compactaciones.
+	for i := 0; i < 50; i++ {
+		if err := b.Push(newTestPayload(strconv.Itoa(i))); err != nil {
+			t.Fatalf("Push(%d): %v", i, err)
+		}
+		if got := b.Len(); got > ceiling {
+			t.Fatalf("Len() = %d tras %d inserciones, supera el tope de %d", got, i+1, ceiling)
+		}
+	}
+
+	// Lo que queda son los más RECIENTES: el más viejo que sobreviva nunca
+	// puede ser el 0, y la secuencia debe salir en orden y sin huecos.
+	got, err := b.PopBatch(ceiling)
+	if err != nil {
+		t.Fatalf("PopBatch(): %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("PopBatch() no devolvió nada")
+	}
+	first, err := strconv.Atoi(got[0].AgentVersion)
+	if err != nil {
+		t.Fatalf("etiqueta inesperada %q", got[0].AgentVersion)
+	}
+	if first == 0 {
+		t.Error("el payload más viejo sigue siendo el primero: no se descartó nada")
+	}
+	for i, p := range got {
+		if want := strconv.Itoa(first + i); p.AgentVersion != want {
+			t.Errorf("got[%d] = %q, se esperaba %q (orden FIFO sin huecos)", i, p.AgentVersion, want)
+		}
+	}
+}
+
+// PopBatch es la razón de ser de A-07: extraer N payloads con UNA lectura y
+// UNA escritura, en vez de N de cada.
+func TestPopBatchReturnsOldestFirst(t *testing.T) {
+	b := NewRingBuffer(filepath.Join(t.TempDir(), "buffer.jsonl"), 100)
+	for _, tag := range []string{"a", "b", "c", "d", "e"} {
 		if err := b.Push(newTestPayload(tag)); err != nil {
 			t.Fatalf("Push(%s): %v", tag, err)
 		}
 	}
-	if got := b.Len(); got != 3 {
-		t.Fatalf("Len() = %d, se esperaba 3 (acotado)", got)
-	}
-	p, err := b.Pop()
+
+	got, err := b.PopBatch(3)
 	if err != nil {
-		t.Fatalf("Pop(): %v", err)
+		t.Fatalf("PopBatch(3): %v", err)
 	}
-	if p.AgentVersion != "b" {
-		t.Errorf("Pop() tras eviction = %q, se esperaba \"b\" (\"a\" fue descartado)", p.AgentVersion)
+	if len(got) != 3 {
+		t.Fatalf("len(PopBatch(3)) = %d, se esperaba 3", len(got))
+	}
+	for i, want := range []string{"a", "b", "c"} {
+		if got[i].AgentVersion != want {
+			t.Errorf("got[%d] = %q, se esperaba %q", i, got[i].AgentVersion, want)
+		}
+	}
+	if n := b.Len(); n != 2 {
+		t.Errorf("Len() tras PopBatch(3) = %d, se esperaba 2", n)
+	}
+}
+
+// Pedir más de lo que hay devuelve lo que hay, no un error.
+func TestPopBatchClampsToWhatIsAvailable(t *testing.T) {
+	b := NewRingBuffer(filepath.Join(t.TempDir(), "buffer.jsonl"), 100)
+	if err := b.Push(newTestPayload("solo-uno")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := b.PopBatch(10)
+	if err != nil {
+		t.Fatalf("PopBatch(10): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, se esperaba 1", len(got))
+	}
+	if _, err := b.PopBatch(10); err != io.EOF {
+		t.Errorf("PopBatch() sobre buffer vacío = %v, se esperaba io.EOF", err)
+	}
+}
+
+// Len() sale de un contador en memoria, así que tiene que sobrevivir a un
+// reinicio del proceso: un RingBuffer nuevo sobre un fichero que ya existe
+// debe contar lo que hay, no partir de cero.
+func TestLenReflectsAnExistingFileOnStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "buffer.jsonl")
+
+	first := NewRingBuffer(path, 100)
+	for i := 0; i < 7; i++ {
+		if err := first.Push(newTestPayload("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Otro RingBuffer sobre el mismo fichero: simula el reinicio del servicio.
+	second := NewRingBuffer(path, 100)
+	if got := second.Len(); got != 7 {
+		t.Errorf("Len() tras reiniciar = %d, se esperaba 7", got)
 	}
 }
 
@@ -162,4 +255,43 @@ func TestConcurrentAccess(t *testing.T) {
 	if got := b.Len(); got != writers*perWriter {
 		t.Errorf("Len() tras la ráfaga concurrente = %d, se esperaba %d", got, writers*perWriter)
 	}
+}
+
+// Referencias de coste de los dos caminos que A-07 arregla.
+
+// Len() lo llama agent.Status(), y el icono de bandeja pregunta el estado
+// cada 5 segundos. Leyendo el fichero entero, un buffer lleno significaba
+// megabytes de disco cada pocos segundos, indefinidamente.
+func BenchmarkLenOnFullBuffer(b *testing.B) {
+	buf := newBenchBuffer(b, 1000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = buf.Len()
+	}
+}
+
+// Drenar el buffer entero: el camino cuadrático. Cada iteración vacía mil
+// payloads y vuelve a llenarlos.
+func BenchmarkDrainFullBuffer(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		buf := newBenchBuffer(b, 1000)
+		b.StartTimer()
+		for {
+			if _, err := buf.PopBatch(5); err != nil {
+				break
+			}
+		}
+	}
+}
+
+func newBenchBuffer(tb testing.TB, n int) *RingBuffer {
+	tb.Helper()
+	buf := NewRingBuffer(filepath.Join(tb.TempDir(), "buffer.jsonl"), n)
+	for i := 0; i < n; i++ {
+		if err := buf.Push(newTestPayload("bench")); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	return buf
 }
