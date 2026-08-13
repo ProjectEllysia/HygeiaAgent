@@ -11,6 +11,12 @@
 > Todo lo que aparece aquí está verificado leyendo el código de ambos repositorios y, cuando
 > hacía falta, el código de las librerías de terceros. Cada punto indica el fichero y la línea
 > concretos para que se pueda comprobar.
+>
+> **Estado a 13 de agosto de 2026.** Las fases 1, 2 y 3 están implementadas. Las secciones
+> correspondientes conservan la redacción original —incluidas las estimaciones que resultaron
+> equivocadas— y llevan añadido un bloque con lo que se midió de verdad al construirlas. La
+> descripción de la estructura de ficheros de la parte 2 describe el ANTES; la estructura
+> propuesta es la que hay ahora.
 
 ---
 
@@ -133,7 +139,7 @@ para Windows.
 
 **Impacto en el usuario: Crítico · Facilidad: Muy fácil**
 
-**Qué ocurre hoy.** En [`collector/processes.go:91`](../collector/processes.go) el porcentaje de
+**Qué ocurre hoy.** En [`collector/processes.go:91`](../internal/collector/processes.go) el porcentaje de
 CPU de cada proceso se calcula así:
 
 ```go
@@ -159,9 +165,9 @@ cpuPct = fields.Float(load_default=None, validate=validate.Range(min=0, max=100)
 3. Como la lista `topCpu` está ordenada de mayor a menor, ese proceso entra seguro en el top 5.
 4. El servidor devuelve un error de validación (`422`, o `400` según la ruta exacta de
    Marshmallow).
-5. En [`shipper/shipper.go:81`](../shipper/shipper.go), `isPermanentStatus` clasifica ambos
+5. En [`shipper/shipper.go:81`](../internal/shipper/shipper.go), `isPermanentStatus` clasifica ambos
    códigos como permanentes.
-6. En [`agent/agent.go:316`](../agent/agent.go), un error permanente hace que el payload se
+6. En [`agent/agent.go:316`](../internal/agent/agent.go), un error permanente hace que el payload se
    **descarte sin guardarlo en el buffer**.
 
 El resultado es que el activo se queda mudo exactamente durante los periodos de carga alta.
@@ -196,7 +202,7 @@ valor emitido no supera el límite.
 **Impacto en el usuario: Crítico · Facilidad: Fácil**
 
 **Qué ocurre hoy.** El agente crea el buffer con capacidad para mil elementos, valor fijado en
-el código y no configurable, en [`agent/agent.go:55`](../agent/agent.go):
+el código y no configurable, en [`agent/agent.go:55`](../internal/agent/agent.go):
 
 ```go
 buf: buffer.NewRingBuffer(cfg.BufferPath, 1000),
@@ -251,7 +257,7 @@ portátil no tienen por qué guardar lo mismo.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
-**Qué ocurre hoy.** [`agent/agent.go:389`](../agent/agent.go), función `drainBuffer`, envía los
+**Qué ocurre hoy.** [`agent/agent.go:389`](../internal/agent/agent.go), función `drainBuffer`, envía los
 payloads pendientes en un bucle cerrado, uno detrás de otro, sin ninguna pausa entre ellos.
 
 El servidor, en `managers.py:836` (`_enforce_min_interval`), rechaza con `429` cualquier
@@ -292,7 +298,7 @@ casi doce minutos. Drenar los mil que caben lo dejaría fuera casi dos horas.
 
 **Impacto en el usuario: Alto · Facilidad: Muy fácil**
 
-**Qué ocurre hoy.** [`collector/inventory_windows.go:47`](../collector/inventory_windows.go)
+**Qué ocurre hoy.** [`collector/inventory_windows.go:47`](../internal/collector/inventory_windows.go)
 recorre las tres ubicaciones del registro de Windows donde se anota el software instalado y
 devuelve todo lo que encuentre con un `DisplayName` no vacío, sin límite.
 
@@ -308,7 +314,7 @@ repite indefinidamente: ese activo pierde un heartbeat cada seis horas para siem
 llega a tener inventario.
 
 Un detalle agravante: el inventario se adjunta al primer heartbeat después de cada escaneo
-([`agent/agent.go:366`](../agent/agent.go)) y se limpia acto seguido. Si ese heartbeat concreto
+([`agent/agent.go:366`](../internal/agent/agent.go)) y se limpia acto seguido. Si ese heartbeat concreto
 falla, el inventario **se pierde por completo** hasta el escaneo siguiente, aunque el fallo no
 tuviera nada que ver con el inventario.
 
@@ -332,7 +338,7 @@ tuviera nada que ver con el inventario.
 
 **Impacto en el usuario: Alto · Facilidad: Fácil**
 
-**Qué ocurre hoy.** En [`collector/processes.go:96`](../collector/processes.go), dentro del
+**Qué ocurre hoy.** En [`collector/processes.go:96`](../internal/collector/processes.go), dentro del
 bucle que recorre todos los procesos:
 
 ```go
@@ -408,7 +414,7 @@ En total, unas cuatro o cinco operaciones de lectura por proceso, cuando bastan 
 
 **Impacto en el usuario: Medio · Facilidad: Fácil**
 
-**Qué ocurre hoy.** [`collector/cpu.go:27`](../collector/cpu.go):
+**Qué ocurre hoy.** [`collector/cpu.go:27`](../internal/collector/cpu.go):
 
 ```go
 perCore, err := gpscpu.PercentWithContext(ctx, sampleInterval(), true)   // sampleInterval() == 1s
@@ -422,7 +428,7 @@ segundo de bloqueo real por cada ciclo.
 **una de cada quince unidades de tiempo bloqueado** en esa llamada. Aunque el recolector corre
 en su propia goroutine y no bloquea a los demás, sí determina la duración mínima de un ciclo
 completo y consume la cuota del `context.WithTimeout` de cinco segundos que
-[`agent/agent.go:377`](../agent/agent.go) le concede.
+[`agent/agent.go:377`](../internal/agent/agent.go) le concede.
 
 Hay además una inconsistencia de diseño: los recolectores de red y de procesos **ya calculan
 tasas guardando la muestra anterior entre ciclos**, exactamente para no tener que bloquear. El
@@ -465,7 +471,7 @@ que el agente tome la muestra base durante el jitter de arranque, que ya existe 
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
-**Qué ocurre hoy.** [`buffer/buffer.go`](../buffer/buffer.go) implementa el ring buffer sobre un
+**Qué ocurre hoy.** [`buffer/buffer.go`](../internal/buffer/buffer.go) implementa el ring buffer sobre un
 fichero JSONL, y las tres operaciones públicas hacen lo mismo:
 
 | Operación | Qué hace realmente | Coste |
@@ -479,7 +485,7 @@ tres kilobytes cada uno, es decir, un fichero de unos tres megabytes):
 
 - **El icono de bandeja.** `hygeia-tray` consulta el estado cada cinco segundos
   ([`cmd/hygeia-tray/main.go:33`](../cmd/hygeia-tray/main.go)), y `Agent.Status()` llama a
-  `buf.Len()` ([`agent/agent.go:76`](../agent/agent.go)). Resultado: **el servicio lee tres
+  `buf.Len()` ([`agent/agent.go:76`](../internal/agent/agent.go)). Resultado: **el servicio lee tres
   megabytes de disco cada cinco segundos** para mostrar un número en un menú. Son unos
   cincuenta megabytes por minuto de lectura, dos gigabytes por hora, indefinidamente. En un
   portátil con disco cifrado esto es perfectamente perceptible.
@@ -533,7 +539,7 @@ Con esos tres cambios, el buffer pasa de cuadrático a lineal sin cambiar su for
 
 **Impacto en el usuario: Bajo · Facilidad: Muy fácil**
 
-**Qué ocurre hoy.** [`collector/processes.go:107` y `:111`](../collector/processes.go) ordenan
+**Qué ocurre hoy.** [`collector/processes.go:107` y `:111`](../internal/collector/processes.go) ordenan
 el vector entero de procesos, primero por CPU y después por memoria, para quedarse con los
 cinco primeros de cada uno.
 
@@ -562,7 +568,7 @@ fichero de log en modo añadir y no lo rota nunca:
 if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 ```
 
-Y [`agent/agent.go:326`](../agent/agent.go) escribe una línea de nivel `Info` **en cada
+Y [`agent/agent.go:326`](../internal/agent/agent.go) escribe una línea de nivel `Info` **en cada
 heartbeat correcto**:
 
 ```go
@@ -648,12 +654,12 @@ implemente `F-01`) y añadir a la integración continua un paso que lo habría c
 **Qué ocurre hoy.** Dos campos del contrato de ingesta que existen en las tres partes (el
 tipo Go, el esquema del servidor y la documentación) pero cuyo valor no es el que se espera:
 
-- **`metrics.cpu.ctxSwitches`.** Declarado en [`payload/payload.go:63`](../payload/payload.go)
+- **`metrics.cpu.ctxSwitches`.** Declarado en [`payload/payload.go:63`](../internal/payload/payload.go)
   sin la etiqueta `omitempty`, y aceptado por el servidor en `schemas.py:142`. Ningún recolector
   lo rellena nunca, así que **siempre se envía el valor cero**. El servidor lo persiste como
   cero, y quien mire ese dato en la base de datos creerá que la máquina no hace ningún cambio
   de contexto.
-- **`metrics.network[].errIn` y `errOut`.** [`collector/network.go:62-63`](../collector/network.go)
+- **`metrics.network[].errIn` y `errOut`.** [`collector/network.go:62-63`](../internal/collector/network.go)
   los copia tal cual del contador de `gopsutil`, que es **acumulado desde el arranque de la
   máquina**. Los campos hermanos de la misma estructura (`rxBytesPerSec`, `txBytesPerSec`) sí se
   convierten a tasa por segundo, y el README §3 dice explícitamente que los errores deberían
@@ -680,7 +686,7 @@ servidor ya está preparado para tratar los campos ausentes como "el agente no r
 
 **Impacto en el usuario: Medio · Facilidad: Media**
 
-**Qué ocurre hoy.** [`collector/inventory_windows.go:29-33`](../collector/inventory_windows.go)
+**Qué ocurre hoy.** [`collector/inventory_windows.go:29-33`](../internal/collector/inventory_windows.go)
 incluye entre las rutas a escanear:
 
 ```go
@@ -788,7 +794,7 @@ conforme el repositorio crezca.
 
 **Impacto en el usuario: Bajo · Facilidad: Fácil**
 
-**Qué ocurre hoy.** Solo tres paquetes (`autostart`, `icon`, `logring`) están bajo `internal/`.
+**Qué ocurría.** (Resuelto en la fase 3.) Solo tres paquetes (`autostart`, `icon`, `logring`) estaban bajo `internal/`.
 Los ocho del núcleo (`agent`, `buffer`, `collector`, `config`, `control`, `payload`, `shipper`,
 `version`) están en la raíz, lo que en Go significa que son **importables desde fuera del
 módulo**: cualquier proyecto podría escribir
@@ -851,8 +857,9 @@ HygeiaAgent/
 
 **Impacto en el usuario: Bajo · Facilidad: Fácil**
 
-**Qué ocurre hoy.** El [`README.md`](../README.md) tiene doscientas noventa y siete líneas y
-hace tres trabajos a la vez:
+**Qué ocurría.** (Resuelto en la fase 3: el README bajó a 143 líneas y el resto se repartió en
+`docs/DISENO.md` y `docs/CONTRATO-INGESTA.md`.) El README tenía doscientas noventa y siete
+líneas y hacía tres trabajos a la vez:
 
 1. **Manual de uso** (§0): cómo compilar, cómo instalar el servicio, cómo usar el tray.
 2. **Documento de diseño** (§1 a §8): la filosofía, por qué Go y no Python, qué métricas se
@@ -870,7 +877,7 @@ cambio distintos, y mezclarlos tiene consecuencias medibles:
   en ninguna de las fases listadas.
 - La copia del contrato **ya divergió** (`A-13`): no menciona el campo `inventory`. Dos copias
   de un contrato son dos contratos.
-- Los enlaces mienten: el README enlaza a [`docs/GUIA-GO.md`](../docs/GUIA-GO.md) dos veces
+- Los enlaces mienten: el README enlazaba a `docs/GUIA-GO.md` dos veces
   (líneas 98 y 99) y **ese fichero no existe**. El directorio `docs/` no existía en absoluto
   antes de este documento.
 
@@ -906,7 +913,7 @@ explica el problema del enlazador de Xcode con comentarios de calidad.
 Le faltan cinco cosas:
 
 1. **Formato.** No hay comprobación de `gofmt`. Y hace falta: la estructura `payload.Software`
-   en [`payload/payload.go:36-48`](../payload/payload.go) tiene la alineación de campos rota
+   en [`payload/payload.go:36-48`](../internal/payload/payload.go) tiene la alineación de campos rota
    (mezcla de tabulaciones que `gofmt` corregiría). Es cosmético, pero es la clase de cosa que
    ensucia todos los `diff` posteriores.
 2. **Análisis estático.** No hay `golangci-lint`. Con la configuración por defecto habría
@@ -938,7 +945,7 @@ porque el valor para el usuario está ahí.
 Un grupo de cosas pequeñas que se pueden resolver en una sola sesión:
 
 - **Dos fuentes de verdad para la versión.** [`VERSION.txt`](../VERSION.txt) dice `1.0.4`;
-  [`version/version.go`](../version/version.go) tiene como valor por defecto `0.1.0-dev`. El
+  [`version/version.go`](../internal/version/version.go) tiene como valor por defecto `0.1.0-dev`. El
   script del instalador lee el primero y lo inyecta por `-ldflags`, pero un binario compilado a
   mano con `go build` reporta `0.1.0-dev` al backend, que lo persiste en
   `MonitoredAsset.agent_version`. Conviene documentar en el README que compilar sin `-ldflags`
@@ -992,8 +999,8 @@ lista con mejor relación entre valor entregado y esfuerzo.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
-**Situación actual.** [`collector/inventory_linux.go`](../collector/inventory_linux.go) y
-[`collector/inventory_darwin.go`](../collector/inventory_darwin.go) son funciones vacías de
+**Situación actual.** [`collector/inventory_linux.go`](../internal/collector/inventory_linux.go) y
+[`collector/inventory_darwin.go`](../internal/collector/inventory_darwin.go) son funciones vacías de
 siete líneas que devuelven un inventario vacío sin error. Solo Windows tiene implementación
 real.
 
@@ -1053,7 +1060,7 @@ hygeia-agent reset              # borra la clave local
 hygeia-agent info               # estado del agente: conectado, buffer, último envío
 ```
 
-La implementación es de una tarde: [`control/client.go`](../control/client.go) ya tiene los
+La implementación es de una tarde: [`control/client.go`](../internal/control/client.go) ya tiene los
 métodos `Enroll`, `Reset` y `Status`; solo hay que añadir tres `case` al `switch` de
 [`cmd/hygeia-agent/commands.go:16`](../cmd/hygeia-agent/commands.go), exactamente igual que el
 `case "debug"` que ya llama a `runDebug()`. El servidor no necesita ningún cambio.
@@ -1074,7 +1081,7 @@ ese momento, el agente recibe `401` en cada envío.
 
 El agente no gestiona ese caso de ninguna manera especial:
 
-- `401` no está en `isPermanentStatus` ([`shipper/shipper.go:79`](../shipper/shipper.go)), y con
+- `401` no está en `isPermanentStatus` ([`shipper/shipper.go:79`](../internal/shipper/shipper.go)), y con
   buen criterio: el comentario explica que tras un reset y un alta nueva el mismo payload sí
   podría entregarse.
 - Pero eso significa que el agente **reintenta cuatro veces con espera exponencial en cada
@@ -1087,13 +1094,13 @@ El agente no gestiona ese caso de ninguna manera especial:
 **Qué hacer.** Tres cambios que se refuerzan entre sí:
 
 1. **Un estado propio para "clave rechazada".** Añadir `StateKeyRejected` a
-   [`control/control.go`](../control/control.go), junto a los cuatro que ya existen. El tray
+   [`control/control.go`](../internal/control/control.go), junto a los cuatro que ya existen. El tray
    muestra un icono distinto y un texto que dice qué pasa: "la clave ya no es válida; pide una
    nueva en Ellysia".
 2. **No llenar el buffer con lo que no se puede entregar.** Con `401` sostenido, dejar de
    guardar payloads nuevos: no se van a poder enviar, y ocupan el sitio de los que sí se
    podrían.
-3. **Permitir sustituir la clave sin reset previo.** Hoy [`agent/agent.go:97`](../agent/agent.go)
+3. **Permitir sustituir la clave sin reset previo.** Hoy [`agent/agent.go:97`](../internal/agent/agent.go)
    rechaza cualquier `Enroll` sobre un agente ya configurado, por una razón de seguridad válida
    (que un usuario local sin privilegios no pueda reapuntar el agente). La forma de conservar
    esa garantía y aun así permitir la rotación es aceptar el `Enroll` **cuando el estado sea
@@ -1281,7 +1288,7 @@ La facilidad es "Media" y el grueso del trabajo no es el flujo en sí (que es me
 
 **Impacto en el usuario: Medio · Facilidad: Fácil**
 
-**Situación actual.** [`shipper/shipper.go:44`](../shipper/shipper.go) crea el cliente HTTP así:
+**Situación actual.** [`shipper/shipper.go:44`](../internal/shipper/shipper.go) crea el cliente HTTP así:
 
 ```go
 client: &http.Client{Timeout: 15 * time.Second},
@@ -1322,7 +1329,7 @@ líneas. Y `F-04` (el subcomando `doctor`) debería comprobar precisamente esto.
 
 **Situación actual.** El servidor ya ajusta una cosa a distancia: devuelve `nextIntervalSec` en
 cada respuesta de ingesta y el agente lo aplica sin reiniciarse
-([`agent/agent.go:284`](../agent/agent.go)). El mecanismo funciona y está probado. Pero es lo
+([`agent/agent.go:284`](../internal/agent/agent.go)). El mecanismo funciona y está probado. Pero es lo
 único: cambiar qué recolectores están activos, cada cuánto se escanea el inventario o cuántos
 procesos entran en el top exige tocar el `config.toml` de cada equipo.
 
@@ -1742,18 +1749,18 @@ Los hallazgos de este documento son verificables. Estos son los comandos y las r
 exactas para reproducir los principales.
 
 **`A-01` — El porcentaje de CPU por proceso puede superar 100.**
-Comparar la fórmula de [`collector/processes.go:91`](../collector/processes.go) con la
+Comparar la fórmula de [`collector/processes.go:91`](../internal/collector/processes.go) con la
 validación de `EllysiaServer/API/src/modules/features/hygeia/schemas.py:180`. Para observarlo en
 vivo, ejecutar el agente en primer plano en una máquina de varios núcleos mientras se satura la
 CPU con dos o más procesos, y mirar el JSON que se envía.
 
 **`A-02` — Buffer contra ventana de reloj.**
-La capacidad está en [`agent/agent.go:55`](../agent/agent.go); la ventana, en
+La capacidad está en [`agent/agent.go:55`](../internal/agent/agent.go); la ventana, en
 `EllysiaServer/API/SecOpsConfig.json`, campo `features.hygeia.limits.clockSkewSec`.
 
 **`A-03` — Intervalo mínimo y drenado.**
 `minIntervalSec` en el mismo fichero de configuración del servidor; la comprobación en
-`managers.py:836`; el bucle de drenado en [`agent/agent.go:389`](../agent/agent.go).
+`managers.py:836`; el bucle de drenado en [`agent/agent.go:389`](../internal/agent/agent.go).
 
 **`A-05` — Llamadas redundantes por proceso.**
 ```bash
@@ -1790,7 +1797,7 @@ Aparece, entre otros, `payload/payload.go`, por la alineación rota de la estruc
 
 **`A-13` / `O-02` — Contrato duplicado y desactualizado.**
 El bloque JSON del §9 del [`README.md`](../README.md) no contiene el campo `inventory`, que sí
-está en [`payload/payload.go:21`](../payload/payload.go) y en `schemas.py:279`.
+está en [`payload/payload.go:21`](../internal/payload/payload.go) y en `schemas.py:279`.
 
 **Estado de las pruebas actuales.**
 ```bash
