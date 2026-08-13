@@ -3,6 +3,8 @@ package collector
 import (
 	"context"
 	"math"
+	"runtime"
+	"sync"
 	"time"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/payload"
@@ -10,21 +12,54 @@ import (
 	gpsload "github.com/shirou/gopsutil/v4/load"
 )
 
-type CPUCollector struct{}
+// CPUCollector guarda los contadores de tiempo de CPU del ciclo anterior
+// para calcular el uso como diferencia entre ciclos — el mismo patrón que ya
+// usaban network.go y processes.go.
+type CPUCollector struct {
+	mu   sync.Mutex
+	prev []gpscpu.TimesStat
+}
 
 func NewCPU() Collector { return &CPUCollector{} }
 
 func (c *CPUCollector) Name() string { return "cpu" }
 
-// Collect mide el uso de CPU. gopsutil/v4 expone Percent(interval, percpu)
-// que bloquea `interval` muestreando los contadores del SO: es la forma
-// fiable de obtener un % instantáneo cross-platform. Como mucho 1s.
+// Collect mide el uso de CPU como diferencia de los contadores del sistema
+// entre este ciclo y el anterior.
+//
+// Antes se usaba gopsutil Percent(interval, percpu), que toma una muestra,
+// DUERME el intervalo indicado y toma otra: un segundo de bloqueo real en
+// cada ciclo. Con el intervalo por defecto de 15 s, el agente pasaba una de
+// cada quince unidades de tiempo parado ahí, y ese segundo salía además de la
+// cuota de 5 s que collectPayload concede a cada colector.
+//
+// Guardando la muestra anterior no hace falta dormir: los contadores del
+// sistema ya son acumulados, así que la diferencia entre dos ciclos consecutivos
+// da el uso del intervalo completo. Es además un dato MEJOR para lo que el
+// backend hace con él: sus umbrales piden carga sostenida
+// (sustainedHeartbeats), no un pico de un segundo, y una media sobre los 15 s
+// enteros describe eso con más fidelidad que una foto de un segundo.
+//
+// El primer ciclo no tiene con qué comparar y ahí sí se usa el muestreo
+// bloqueante — una vez en la vida del proceso, no una por ciclo. Tiene que
+// haber dato desde el principio porque metrics.cpu es obligatorio en el
+// esquema de ingesta: un heartbeat sin él se rechaza entero.
 func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	perCore, err := gpscpu.PercentWithContext(ctx, sampleInterval(), true)
+	times, err := gpscpu.TimesWithContext(ctx, true)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	prev := c.prev
+	c.prev = times
+	c.mu.Unlock()
+
+	perCore, err := c.perCorePct(ctx, prev, times)
 	if err != nil {
 		return err
 	}
@@ -51,6 +86,51 @@ func (c *CPUCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 
 	m.CPU = out
 	return nil
+}
+
+// perCorePct devuelve el uso por núcleo. Con muestra anterior utilizable, es
+// la diferencia entre ambas; sin ella (primer ciclo, o el número de núcleos
+// cambió por un hot-plug) cae al muestreo bloqueante, que es la única forma
+// de tener un dato en ese momento.
+func (c *CPUCollector) perCorePct(ctx context.Context, prev, cur []gpscpu.TimesStat) ([]float64, error) {
+	if len(prev) == 0 || len(prev) != len(cur) {
+		return gpscpu.PercentWithContext(ctx, sampleInterval(), true)
+	}
+
+	out := make([]float64, len(cur))
+	for i := range cur {
+		out[i] = roundPct(deltaPct(prev[i], cur[i]))
+	}
+	return out, nil
+}
+
+// deltaPct calcula el porcentaje de tiempo ocupado de un núcleo entre dos
+// lecturas de sus contadores acumulados.
+//
+// El reparto de qué cuenta como ocupado replica el de gopsutil (getAllBusy):
+// en Linux, Guest y GuestNice ya vienen sumados dentro de User y Nice, así
+// que contarlos otra vez inflaría el total; e Idle e Iowait son las dos
+// formas de no estar haciendo trabajo.
+func deltaPct(prev, cur gpscpu.TimesStat) float64 {
+	prevTotal, prevBusy := busy(prev)
+	curTotal, curBusy := busy(cur)
+
+	deltaTotal := curTotal - prevTotal
+	if deltaTotal <= 0 {
+		// Contadores sin avanzar o que dieron la vuelta (suspensión, migración
+		// de la máquina virtual): no hay nada que medir en este intervalo.
+		return 0
+	}
+	return 100 * (curBusy - prevBusy) / deltaTotal
+}
+
+func busy(t gpscpu.TimesStat) (total, busy float64) {
+	total = t.Total()
+	if runtime.GOOS == "linux" {
+		total -= t.Guest
+		total -= t.GuestNice
+	}
+	return total, total - t.Idle - t.Iowait
 }
 
 func sampleInterval() time.Duration { return time.Second }

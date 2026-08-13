@@ -446,6 +446,19 @@ heartbeat sin datos de CPU sería rechazado. La forma limpia de resolverlo es qu
 ciclo siga usando el muestreo bloqueante y los siguientes usen diferencias — o, más simple,
 que el agente tome la muestra base durante el jitter de arranque, que ya existe y ya espera.
 
+> **Medición posterior (implementado el 13 de agosto de 2026).** Se eligió la primera opción:
+> el primer ciclo sigue muestreando bloqueando (una vez en la vida del proceso) y a partir del
+> segundo se calcula por diferencia. Medido sobre `agent.collectPayload`, que es el ciclo de
+> recolección completo con todos los colectores en paralelo:
+>
+> | | Antes | Después |
+> |---|---|---|
+> | Duración de un ciclo de recolección | 1 001 ms | 27,5 ms |
+>
+> Es una reducción de unas **36 veces**, y deja claro que el segundo de bloqueo del recolector
+> de CPU no era *parte* del coste del ciclo: era prácticamente **todo** el coste del ciclo.
+> Los otros cuatro colectores juntos suman menos de treinta milisegundos.
+
 ---
 
 #### `A-07` — El buffer en disco reescribe el fichero completo en cada operación, incluso al contarlo
