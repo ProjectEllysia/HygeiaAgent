@@ -30,9 +30,17 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 - **El fichero de log crecía sin límite** (`A-09`), unos 350 MB al año por
   equipo. Ahora rota a 5 MB y se registran los cambios de estado en vez de un
   heartbeat correcto cada quince segundos.
-- **El build de macOS llevaba días roto en la integración continua** (`A-10`).
-  La CI instalaba Go 1.25.0 exacto, anterior al toolchain de la imagen
-  `macos-26-arm64`.
+- **La CI instalaba Go 1.25.0 exacto** (`A-10`), de agosto de 2025, porque
+  `setup-go` trata la directiva `go` del `go.mod` como una versión exacta. Se
+  perdían doce parches, varios de seguridad. Ahora se fija `1.25.x`.
+
+### Conocido, sin resolver
+
+- **El build de macOS falla en la integración continua sobre la imagen
+  `macos-26-arm64`**, con `ld: unknown file type`. No es una regresión: ese job
+  no ha pasado nunca, y el fallo se reproduce igual con Go 1.24.0, 1.25.0 y
+  1.25.12. Mientras se investiga, la matriz incluye también `macos-15`, que sí
+  da cobertura real, y `macos-latest` se ejecuta tolerando el fallo.
 
 ### Rendimiento
 
