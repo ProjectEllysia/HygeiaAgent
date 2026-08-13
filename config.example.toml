@@ -11,7 +11,7 @@
 # Cualquier campo puede sobreescribirse con variables de entorno:
 #   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH,
 #   HYGEIA_INVENTORY_INTERVAL_SEC, HYGEIA_BUFFER_MAX_ITEMS,
-#   HYGEIA_INVENTORY_MAX_ITEMS
+#   HYGEIA_INVENTORY_MAX_ITEMS, HYGEIA_LOG_LEVEL
 
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
 
@@ -54,3 +54,13 @@ collectors  = ["cpu", "memory", "disk", "network", "processes"]
 # payload más viejo que eso se rechaza al drenar, por muy bien guardado que
 # estuviera. Subirlo por encima de esa ventana solo gasta disco.
 # bufferMaxItems = 1000
+
+# Cuánto se escribe en hygeia-agent.log: debug, info (por defecto), warn o
+# error. En info se registran los cambios de estado (conectado -> error local
+# y viceversa), no cada heartbeat: una línea cada 15 s llenaba el fichero sin
+# aportar nada que no diga ya "último envío" en la bandeja.
+#
+# Ponlo en debug para diagnosticar un agente concreto en campo; recuerda
+# volver a info después. El fichero se rota solo al llegar a 5 MB, y se
+# conserva un único fichero anterior (hygeia-agent.log.1).
+# logLevel = "info"

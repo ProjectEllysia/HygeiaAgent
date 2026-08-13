@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -284,5 +285,25 @@ func TestLoad_InventoryMaxItemsEnvOverride(t *testing.T) {
 	}
 	if cfg.InventoryMaxItems != 500 {
 		t.Errorf("InventoryMaxItems = %d, want 500", cfg.InventoryMaxItems)
+	}
+}
+
+// Un typo en el nivel de log no puede dejar sin agente al activo: cae a info.
+func TestSlogLevel(t *testing.T) {
+	cases := map[string]slog.Level{
+		"debug":     slog.LevelDebug,
+		"DEBUG":     slog.LevelDebug,
+		"  warn  ":  slog.LevelWarn,
+		"warning":   slog.LevelWarn,
+		"error":     slog.LevelError,
+		"info":      slog.LevelInfo,
+		"":          slog.LevelInfo,
+		"tonterías": slog.LevelInfo,
+	}
+	for in, want := range cases {
+		c := &Config{LogLevel: in}
+		if got := c.SlogLevel(); got != want {
+			t.Errorf("SlogLevel(%q) = %v, se esperaba %v", in, got, want)
+		}
 	}
 }

@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -79,6 +81,13 @@ type Config struct {
 	// heartbeat entero, no solo el inventario.
 	InventoryMaxItems int `toml:"inventoryMaxItems"`
 
+	// LogLevel controla cuánto se escribe en el log del servicio: debug,
+	// info (por defecto), warn o error. Existe porque el heartbeat correcto
+	// pasó a nivel debug —una línea cada 15 s llenaba el fichero sin aportar
+	// nada— y hacía falta una forma de volver a encenderlo para diagnosticar
+	// un agente concreto en campo, sin recompilar.
+	LogLevel string `toml:"logLevel"`
+
 	// path recuerda de dónde se cargó, para que Save() reescriba el mismo
 	// fichero sin que el caller tenga que arrastrar la ruta.
 	path string `toml:"-"`
@@ -133,6 +142,7 @@ func Load(path string) (*Config, error) {
 		InventoryIntervalSec: 21600, // 6h: el software instalado cambia poco
 		BufferMaxItems:       defaultBufferMaxItems,
 		InventoryMaxItems:    defaultInventoryMaxItems,
+		LogLevel:             "info",
 		path:                 path,
 	}
 
@@ -263,6 +273,9 @@ func applyEnv(c *Config) error {
 		}
 		c.BufferMaxItems = n
 	}
+	if v := os.Getenv("HYGEIA_LOG_LEVEL"); v != "" {
+		c.LogLevel = v
+	}
 	if v := os.Getenv("HYGEIA_INVENTORY_MAX_ITEMS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -271,4 +284,20 @@ func applyEnv(c *Config) error {
 		c.InventoryMaxItems = n
 	}
 	return nil
+}
+
+// SlogLevel traduce el nivel de log de la config al de log/slog. Un valor
+// desconocido cae a Info en vez de fallar el arranque: quedarse sin agente
+// por un typo en el nivel de log sería mucho peor que el typo.
+func (c *Config) SlogLevel() slog.Level {
+	switch strings.ToLower(strings.TrimSpace(c.LogLevel)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

@@ -383,22 +383,41 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 		a.setState(control.StateLocalError, err)
 		return 0
 	}
-	a.log.Info("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
+	// Debug y no Info: el heartbeat correcto es el caso normal, y una línea
+	// cada 15 s son ~5.800 al día por equipo que no dicen nada que no diga ya
+	// lastPushAt. Lo que sí se registra siempre es el CAMBIO de estado, que
+	// es lo que de verdad se busca al abrir el log (ver setState).
+	a.log.Debug("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
 	a.setState(control.StateConnected, nil)
 	a.markPush()
 	a.drainBuffer(ctx, shp)
 	return time.Duration(resp.NextIntervalSec) * time.Second
 }
 
+// setState actualiza el estado observable y registra las TRANSICIONES.
+//
+// Solo los cambios: repetir "conectado" cada 15 segundos no informa de nada,
+// mientras que "pasó de conectado a error local" a las 03:14 es exactamente
+// lo que se busca al abrir el log de un agente que dio problemas.
 func (a *Agent) setState(state string, err error) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	previous := a.state
 	a.state = state
 	if err != nil {
 		a.lastError = err.Error()
 	} else {
 		a.lastError = ""
 	}
+	a.mu.Unlock()
+
+	if previous == state {
+		return
+	}
+	if err != nil {
+		a.log.Warn("cambio de estado", "de", previous, "a", state, "err", err)
+		return
+	}
+	a.log.Info("cambio de estado", "de", previous, "a", state)
 }
 
 // restoreInventory devuelve a la cola el inventario que viajaba en un payload
