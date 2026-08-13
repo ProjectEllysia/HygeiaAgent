@@ -11,6 +11,27 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Versión de Go de TODA la CI, en un solo sitio.
+  #
+  # Deliberadamente NO se usa `go-version-file: go.mod`. La directiva `go` del
+  # go.mod es un MÍNIMO de lenguaje, pero setup-go la interpreta como una
+  # versión exacta, y Go canoniza esa directiva a la forma con parche
+  # (`go 1.25.0`) — `go mod edit -go=1.25` se revierte en el siguiente
+  # `go mod tidy`. El resultado era que la CI instalaba exactamente 1.25.0,
+  # de agosto de 2025, e iba quedándose atrás una release tras otra.
+  #
+  # Eso fue lo que rompió el build de macOS: la imagen macos-latest pasó a ser
+  # macos-26-arm64 (macOS Tahoe), cuyo toolchain es POSTERIOR a Go 1.25.0, y
+  # el enlazador de Apple no reconocía los objetos que generaba aquel Go
+  # ("ld: unknown file type in ...o"). Linux y Windows no se enteraban porque
+  # no usan el enlazador de Apple.
+  #
+  # Con `1.25.x` se coge el último parche de la serie (correcciones de
+  # seguridad y de compatibilidad de toolchain) sin saltar de minor por
+  # sorpresa. Al subir el mínimo en go.mod, hay que subir también este número.
+  GO_VERSION: "1.25.x"
+
 jobs:
   build-and-test:
     strategy:
@@ -23,18 +44,18 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
 
       - name: go vet
         run: go vet ./...
 
-      # macos-latest trae Xcode 16.3+, cuyo linker por defecto ("ld-prime")
-      # usa chained fixups y rompe el link de binarios cgo (gopsutil,
-      # systray) con "unknown file type in ...o". -no_fixup_chains es el
-      # workaround vigente ya que -ld_classic fue removido en ese Xcode.
+      # Sin CGO_LDFLAGS a mano. Antes se pasaba `-Wl,-no_fixup_chains` en
+      # macOS como rodeo para el enlazador de Xcode 16.3, pero (a) ese rodeo
+      # dejó de funcionar en macos-26-arm64, y (b) sobreescribir CGO_LDFLAGS
+      # pisa el `-O2 -g` que setup-go pone por defecto. La causa real era la
+      # versión de Go congelada; ver el comentario de GO_VERSION arriba.
       - name: go build (los dos binarios y todos los paquetes)
-        env:
-          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go build ./...
 
       # -race necesita cgo. ubuntu-latest (gcc) y macos-latest (clang, ya
@@ -43,8 +64,6 @@ jobs:
       # se corre sin -race en vez de arriesgar un CI intermitente.
       - name: go test -race
         if: runner.os != 'Windows'
-        env:
-          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go test -race ./...
 
       - name: go test

@@ -11,8 +11,6 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.6
 	golang.org/x/image v0.44.0
 	golang.org/x/sys v0.47.0
-    github.com/antandros/go-dpkg v0.0.0-latest
-    github.com/knqyf263/go-rpmdb v0.0.0-latest
 )
 
 require (
