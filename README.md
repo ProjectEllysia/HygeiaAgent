@@ -6,217 +6,324 @@
 >
 > Hygeia (Ὑγίεια) es la diosa griega de la salud: este agente toma los **signos vitales**
 > del activo y los reporta; quien decide si algo está "enfermo" es el backend.
->
-> Este README es el documento de diseño del repositorio. El backend vive en el repo
-> `Ellysia`; el **único acoplamiento** entre ambos es el *contrato de ingesta* (§9).
+
+Dos binarios:
+
+| Software | Proposito |
+|---|---|
+| `hygeia-agent` | El servicio: recolecta y envía. Es el único imprescindible. |
+| `hygeia-tray` | Companion de bandeja, opcional: muestra el estado y permite dar de alta el activo sin editar ficheros a mano. Solo para estaciones de trabajo. |
 
 ---
 
-## 0. Arranque rápido (repo)
+## Documentación
 
-Este repo contiene el **esqueleto Go compilable** de la Fase 1 (scaffolding con
-`TODO`s). Sin dependencias externas todavía: compila con la stdlib.
+| Documento | Para qué |
+|---|---|
+| Este README | Compilar, instalar y usar el agente. |
+| [`docs/DISENO.md`](docs/DISENO.md) | Por qué el agente es como es: filosofía, arquitectura, decisiones. |
+| [`docs/CONTRATO-INGESTA.md`](docs/CONTRATO-INGESTA.md) | **La costura con el backend.** Fuente única: los dos repositorios enlazan aquí en vez de copiarlo. |
+| [`docs/ANALISIS-INGENIERIA.md`](docs/ANALISIS-INGENIERIA.md) | Auditoría técnica y plan de trabajo por fases. |
 
+---
+
+## Desarrollo (primer plano)
+
+```bash
+cp config.example.toml config.toml
 ```
-main.go  version.go  config.example.toml  go.mod
-payload/  config/  collector/  buffer/  shipper/   docs/GUIA-GO.md
+
+Rellena `serverUrl` y arranca:
+
+```bash
+HYGEIA_CONFIG=$PWD/config.toml go run ./cmd/hygeia-agent
 ```
 
-1. Instala Go (ver `docs/GUIA-GO.md` §2).
-2. `cp config.example.toml config.toml` y rellena `serverUrl` + `agentKey`
-   (o usa `HYGEIA_SERVER_URL` / `HYGEIA_AGENT_KEY`).
-3. `go run .`
-4. Rellena los `TODO` (gopsutil, TOML, shipper, buffer) siguiendo
-   `docs/GUIA-GO.md` §7.
+Sin `agentKey` el agente **no falla**: arranca en estado "sin configurar" y espera a que le
+llegue la clave.
 
-> **Guía didáctica de Go** (instalación, programación y compilación desde cero):
-> [`docs/GUIA-GO.md`](docs/GUIA-GO.md).
->
-> El diseño (filosofía, métricas, fases, contrato de ingesta) sigue abajo; este
-> README sigue siendo el **documento de diseño** del repositorio.
+## Compilar
 
----
+```bash
+go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.5" ./cmd/hygeia-agent
+```
 
-## 1. Filosofía: el agente es tonto a propósito
+El tray, en Windows, sin ventana de consola:
 
-La **autoridad de detección vive en el backend**, no aquí. Así se cambian umbrales y reglas
-sin re-desplegar el agente en decenas de hosts. El agente solo:
+```bash
+go build -ldflags "-H=windowsgui" ./cmd/hygeia-tray
+```
 
-1. **Se da de alta** (una vez): lee su clave de agente de la config.
-2. **Recolecta** métricas cada N segundos.
-3. **Empuja** un heartbeat al backend.
-4. **Sobrevive** a que el backend no responda (buffer + reintento).
-5. **Se auto-ajusta** al `nextIntervalSec` que responde el backend.
+Sin `-ldflags`, el binario reporta la versión `0.1.0-dev` al backend.
 
-Lo que **NO** hace: no decide qué es una anomalía, no guarda histórico local largo, no abre
-puertos de red (solo hace peticiones salientes → funciona detrás de NAT sin exponer nada).
-
----
-
-## 2. Lenguaje: **Go** (recomendado), con Python como prototipo desechable
-
-| Opción | A favor | En contra | Veredicto |
+| | Windows | Linux | macOS |
 |---|---|---|---|
-| **Go** ✅ | Binario **estático único** sin runtime; cross-compila a Windows/Linux/macOS; huella mínima; `gopsutil` da CPU/mem/disco/red/procesos cross-platform de fábrica; es lo que usan node_exporter, Telegraf, el core de Datadog… | No es el stack del backend (Python) | **El agente real va en Go.** |
-| **Rust** | Aún más pequeño/rápido (`sysinfo`) | Desarrollo más lento; no aporta sobre Go aquí | Solo si ya dominas Rust |
-| **Python + `psutil`** | `psutil` hace *todo*; prototipo en una tarde | Distribuir necesita empaquetar el runtime (PyInstaller ≈ decenas de MB) | **Prototipo, no producto** |
+| `hygeia-agent` | ✅ | ✅ | ✅ (cross-compila) |
+| `hygeia-tray` | ✅ | ✅ | requiere cgo y toolchain nativo |
 
-> **Recomendación práctica:** escribe primero un **prototipo en Python+psutil** (~30 líneas:
-> bucle → psutil → POST) para validar el flujo contra el backend en cuanto sus Fases 0+1
-> estén. Pero el agente que **distribuyes e instalas** hazlo en **Go**: un binario que copias
-> y arrancas como servicio gana a cualquier cosa con runtime. No inviertas en empaquetar
-> Python para distribución — ese esfuerzo se tira al pasar a Go.
+## Compilar los paquetes de distribución
 
----
+Dos herramientas, cada una para lo suyo. Ninguna de las dos escribe en el repositorio: `dist/`
+e `installer/dist/` están ignoradas.
 
-## 3. Métricas a recoger
+### Todo, para las cinco plataformas
 
-**Núcleo (todas cross-platform con `gopsutil`):**
-
-- **CPU** — uso % global y por core; `loadAvg` (1/5/15; en Windows se emula u omite);
-  context switches.
-- **Memoria** — total/usada/disponible/%; swap usado %.
-- **Disco** — por punto de montaje: uso %, bytes libres; tasas IO read/write e IOPS.
-- **Red** — por interfaz: bytes/paquetes in/out como **tasa** (no acumulado); errores y
-  drops; nº de conexiones activas.
-- **Procesos** — total; zombies; **top-N por CPU y por memoria** (pid, nombre, %). El top-N
-  es lo que convierte "CPU al 98 %" en "CPU al 98 % **por `xmrig`**".
-- **Sistema** — uptime, boot time, usuarios conectados, temperatura (si hay sensor).
-
-**Señales de seguridad (opcional, diferencial de Ellysia — Fase 4):**
-
-- Puertos nuevos a la escucha respecto al heartbeat anterior (persistencia/backdoor).
-- Procesos con CPU alta sostenida y binario en rutas sospechosas (`/tmp`, `/dev/shm`) →
-  olor a cryptominer.
-- Recuento de logins fallidos (`auth.log` / Event Log) → fuerza bruta.
-
-> Empieza por el núcleo. Las señales de seguridad aportan mucho, pero solo tienen sentido
-> cuando el flujo base ya funciona.
-
----
-
-## 4. Arquitectura interna
-
-```
-hygeia-agent/
-  main.go                 # arranque, señales, bucle principal
-  config/                 # carga de config (fichero + env), enrollment
-  collector/              # un colector por familia: cpu, mem, disk, net, proc (gopsutil)
-  buffer/                 # ring buffer en disco: resiliencia si el backend cae
-  shipper/                # POST /hygeia/ingest, gzip, reintento con backoff
-  version.go              # agentVersion (va en cada payload)
+```bash
+goreleaser release --snapshot --clean --skip=publish
 ```
 
-**Bucle:** `ticker` cada `intervalSec` → colectores en paralelo (goroutines) con timeout →
-ensamblar payload (§9) → shipper. Si el POST falla, al **buffer** (ring en disco, tamaño
-acotado). Al recuperar conexión, drena el buffer con backoff exponencial (evita martillear
-un backend que se reinicia).
+Unos siete segundos. Deja en `dist/` los binarios, los archivos `.tar.gz`/`.zip`, los paquetes
+`.deb` y `.rpm` y `checksums.txt`. Es exactamente lo que hará la CI al publicar, así que sirve
+para comprobar una release antes de etiquetar.
 
-**Config (fichero TOML/YAML + override por env):**
+### El instalador de Windows
+
+```powershell
+.\installer\build-installer.ps1
+```
+
+Compila los dos `.exe`, genera el script de Inno Setup y produce
+`installer/dist/hygeia-agent-setup-<version>.exe`. Requiere:
+
+- Un `config.toml` en la raíz del repositorio, del que toma el `serverUrl` que se empotra en el
+  instalador. **No está en el repositorio** (lleva datos del despliegue): sale de
+  `cp config.example.toml config.toml`.
+- Inno Setup. Si no lo encuentra, intenta instalarlo con WinGet, y si tampoco puede deja el
+  `.iss` listo para compilarlo a mano.
+
+La versión sale de `VERSION.txt`, o de `-Version 1.2.3` para una prueba puntual.
+
+Del `config.toml` empotrado se quitan dos campos a propósito: la `agentKey` —distribuir la del
+desarrollador filtraría esa clave a todos los clientes y los haría colisionar sobre el mismo
+activo— y el `bufferPath`, que si es relativo se resolvería contra el directorio de trabajo del
+servicio y rompería el buffer.
+
+### Por qué son dos herramientas y no una
+
+Compilar los binarios de Windows dos veces cuesta segundos y no merece la pena unificarlo. Lo
+que hace el instalador no lo hace goreleaser: para el servicio y cierra el tray antes de
+sobrescribir los ejecutables (si no, están bloqueados y la copia falla), registra el arranque
+del tray para la sesión del usuario en vez de para el token elevado del instalador, y no pisa
+el `config.toml` del cliente al actualizar.
+
+## Publicar una versión
+
+```bash
+# 1. VERSION.txt y la etiqueta TIENEN que coincidir: hay un guardián en la CI.
+echo 1.0.6 > VERSION.txt
+git commit -am "chore: versión 1.0.6"
+
+# 2. Etiquetar y empujar. Esto es lo que dispara la publicación.
+git tag v1.0.6
+git push origin main --tags
+```
+
+El flujo compila las cinco plataformas, genera los paquetes y las sumas, ejecuta
+`build-installer.ps1` en un runner de Windows, adjunta el `.exe` resultante y crea la release
+**en borrador**. Queda revisarla en GitHub y darle a publicar.
+
+Para que el instalador se genere en la CI hace falta definir la variable de repositorio
+`HYGEIA_SERVER_URL` (Settings → Secrets and variables → Actions → Variables). Sin ella ese paso
+se salta con un aviso, en vez de publicar un instalador que apunte al marcador de posición del
+ejemplo.
+
+## Instalar desde una release
+
+Cada etiqueta `v*` publica en GitHub binarios para `linux/amd64`, `linux/arm64`,
+`windows/amd64`, `darwin/amd64` y `darwin/arm64`, paquetes `.deb` y `.rpm`, el instalador de
+Windows y un `checksums.txt`.
+
+| Fichero | Qué lleva dentro |
+|---|---|
+| `hygeia-agent-setup-<version>.exe` | **La forma normal de instalar en Windows.** Instalador de doble clic: los dos binarios, el `serverUrl` ya relleno, el servicio registrado y el tray en el arranque de sesión. |
+| `hygeia_<version>_windows_amd64.zip` | Los mismos dos ejecutables sueltos, para despliegue automatizado sin interfaz. |
+| `hygeia_<version>_linux_*.tar.gz` · `hygeia_<version>_darwin_*.tar.gz` | Solo `hygeia-agent`: fuera de Windows no se distribuye el tray. |
+| `hygeia-agent_<version>_linux_*.deb` · `.rpm` | Paquetes nativos, con el servicio registrado al instalar. |
+
+**Los binarios todavía no están firmados.** Comprueba la suma antes de instalar, y cuenta con el
+aviso de SmartScreen en Windows:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+En Debian, Ubuntu y derivadas:
+
+```bash
+sudo apt install ./hygeia-agent_<version>_linux_amd64.deb
+```
+
+En Fedora, RHEL y derivadas:
+
+```bash
+sudo dnf install ./hygeia-agent_<version>_linux_amd64.rpm
+```
+
+El paquete deja el binario en `/usr/bin`, la configuración en `/etc/hygeia/config.toml` (con
+permisos `0600`, porque ahí acaba la clave del agente) y registra el servicio. Después queda
+poner la URL del servidor, arrancar y dar de alta:
+
+```bash
+sudo systemctl start hygeia-agent
+echo "$CLAVE_DE_AGENTE" | sudo hygeia-agent enroll
+```
+
+Una actualización conserva `config.toml` —y con él la clave— y reinicia el servicio solo si
+estaba en marcha.
+
+## Instalar como servicio
+
+Se registra en el gestor de servicios del sistema operativo (systemd, servicio de Windows o
+launchd) vía `kardianos/service`. Requiere privilegios de administrador o root:
+
+```bash
+hygeia-agent install
+```
+
+```bash
+hygeia-agent start
+hygeia-agent status
+hygeia-agent stop
+hygeia-agent uninstall
+```
+
+La config vive en el directorio de estado del servicio, no junto al binario: el servicio corre
+con un working directory que no controlamos (en Windows, System32).
+
+| SO | Directorio de estado |
+|---|---|
+| Windows | `C:\ProgramData\Hygeia\` |
+| Linux | `/etc/hygeia/` |
+| macOS | `/Library/Application Support/Hygeia/` |
+
+Ahí van `config.toml`, `buffer.jsonl` y `hygeia-agent.log`. En modo servicio los logs van al
+fichero, rotado a 5 MB y conservando un fichero anterior; en primer plano, a stderr.
+
+## Dar de alta el agente
+
+Un agente recién instalado no tiene clave y no reporta nada hasta que se le da una. Se puede
+hacer desde el icono de bandeja, o desde la línea de órdenes — que es lo único disponible en un
+servidor sin escritorio:
+
+```bash
+echo "$CLAVE_DE_AGENTE" | hygeia-agent enroll
+```
+
+Se admite también `hygeia-agent enroll <clave>`, pero **la clave pasada como argumento queda
+visible** para cualquier usuario de la máquina con `ps`, y se queda en el historial del
+intérprete. Por eso la forma recomendada, y la que conviene usar en un `cloud-init` o un
+playbook de Ansible, es la entrada estándar.
+
+Para retirarle la clave (deja de reportar hasta que se le dé de alta otra vez):
+
+```bash
+hygeia-agent reset
+```
+
+Pregunta antes de borrar. Sin terminal donde confirmar, exige `--yes` explícitamente en vez de
+darlo por hecho.
+
+## Diagnosticar
+
+Dos preguntas distintas, dos órdenes distintas:
+
+```bash
+hygeia-agent status   # ¿está vivo el proceso? (se lo pregunta al gestor de servicios)
+hygeia-agent info     # ¿está reportando? (se lo pregunta al propio agente)
+```
+
+Un agente puede estar perfectamente en ejecución y llevar horas sin poder entregar un
+heartbeat; `info` enseña el estado de conexión, cuántos payloads hay en el buffer, cuándo fue
+el último envío y el último error.
+
+Y cuando la respuesta es "no está reportando" y hace falta saber **por qué**:
+
+```bash
+hygeia-agent doctor
+```
+
+Comprueba, en el orden en que se descartan las causas: el fichero de configuración y sus
+permisos, la URL, el formato de la clave, el proxy y la CA propia, la resolución DNS, la
+conectividad TCP, el certificado TLS y su caducidad, si el servidor acepta la clave, la
+desviación del reloj, y el estado del servicio. Cada fallo lleva debajo qué hacer, y el código de
+salida es distinto de cero si algo va mal, para poder usarlo desde un script de despliegue.
+
+No imprime nunca el secreto de la clave ni la contraseña del proxy: esta salida es lo primero
+que se pega en un ticket de soporte.
+
+Para las interioridades del proceso, sin buscar el fichero de log:
+
+```bash
+hygeia-agent debug
+```
+
+## Redes corporativas
+
+Si la red obliga a pasar por un proxy, o inspecciona el tráfico TLS con una autoridad de
+certificación propia, hay dos campos en `config.toml`:
+
+```toml
+proxyUrl = "http://usuario:clave@proxy.empresa.local:3128"
+caFile   = "C:/ProgramData/Hygeia/empresa-ca.pem"
+```
+
+Sin `caFile`, en una red con inspección TLS el agente **no puede conectar en absoluto**: el
+certificado que ve está emitido por la autoridad interna, y rechazar certificados inválidos no
+es negociable en un producto de seguridad. El certificado indicado se **suma** al almacén del
+sistema, nunca lo sustituye, para que el agente siga funcionando fuera de la oficina.
+
+`proxyUrl` hace falta aunque estén definidas `HTTP_PROXY` y `HTTPS_PROXY`: un servicio de Windows
+corriendo como `LocalSystem` no hereda las variables de entorno del usuario.
+
+`hygeia-agent doctor` comprueba los dos con la misma configuración que usa el servicio.
+
+## Si Ellysia rota la clave
+
+Rotar una clave desde Ellysia invalida la anterior de inmediato. El agente lo detecta, deja de
+enviar —no llena el buffer con lo que ya no se puede entregar— y el icono de bandeja pasa a rojo
+con el texto "clave rechazada". La nueva se aplica directamente, sin necesidad de reestablecer
+nada antes:
+
+```bash
+echo "$CLAVE_NUEVA" | hygeia-agent enroll
+```
+
+## Instalar el icono de bandeja
+
+Opcional y **sin privilegios**: se registra en el arranque por usuario, no en el del sistema.
+
+```bash
+hygeia-tray
+```
+
+```bash
+hygeia-tray enable-autostart
+hygeia-tray status
+hygeia-tray disable-autostart
+```
+
+Un servidor sin escritorio corre `hygeia-agent` solo, sin tray, exactamente igual.
+
+## Configuración
+
+Fichero TOML con override por variables de entorno. Todas las opciones, con sus valores por
+defecto, sus rangos y por qué existen, están documentadas en
+[`config.example.toml`](config.example.toml).
+
 ```toml
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
-agentKey    = "..."          # la clave emitida al dar de alta el activo en el backend
+agentKey    = "..."          # opcional: puede llegar por el tray
 intervalSec = 15
-collectors  = ["cpu","memory","disk","network","processes"]
+collectors  = ["cpu", "memory", "disk", "network", "processes"]
 ```
 
----
+## Estructura del repositorio
 
-## 5. Resiliencia y seguridad (aquí NO se recorta)
-
-- **Sin pérdida de datos ni crecimiento sin límite:** buffer en disco **acotado** (ring);
-  si se llena, descarta lo más viejo. Nunca RAM ni disco ilimitados.
-- **TLS obligatorio** contra el backend; rechazar certificados inválidos (nada de
-  `InsecureSkipVerify`).
-- **Clave de agente** en fichero con permisos restringidos (0600 / ACL). Nunca en logs.
-- **Mínimo privilegio:** casi todas las métricas se leen sin root/admin; solo algún dato de
-  proceso ajeno o temperatura pide privilegios. Documenta qué necesita elevación y degrada
-  con elegancia si no lo tiene (omite esa métrica, no crashees).
-- **Auto-observación:** logs estructurados del propio agente (último push OK, tamaño del
-  buffer, errores) para diagnosticar un agente mudo.
-- **Releases firmadas.** Auto-update es opcional y de nicho — no en beta.
-
----
-
-## 6. Empaquetado / despliegue
-
-Un binario por plataforma + el envoltorio de servicio del SO:
-
-- **Linux:** unit `systemd` (`Restart=always`).
-- **Windows:** servicio de Windows (p. ej. `kardianos/service`, abstrae los tres SO).
-- **macOS:** `launchd`.
-
-Cross-compilación desde un solo `GOOS/GOARCH` — sin toolchains por plataforma. Distribución
-= copiar un binario + un fichero de config.
-
----
-
-## 7. Fases
-
-| Fase | Entregable |
-|---|---|
-| **0** | Prototipo Python+psutil: bucle → POST a `/hygeia/ingest`. Valida el backend. |
-| **1** | Agente Go: config + enrollment + colectores CPU/mem/disco + shipper. |
-| **2** | Red + procesos (top-N) + buffer en disco con reintento/backoff. |
-| **3** | Servicio del SO (systemd/Windows/launchd) + releases firmadas. |
-| **4** (opcional) | Señales de seguridad (puertos nuevos, cryptominer, logins fallidos). |
-
-**Rebanada mínima:** Fase 0 (Python) contra las Fases 0+1 del backend → ves un heartbeat
-entrando en la DB. Luego Fase 1 en Go para el artefacto real.
-
----
-
-## 8. Autenticación
-
-Cada activo tiene una **clave de agente** opaca, emitida por el backend al dar de alta el
-activo (`POST /hygeia/assets`, se muestra **una sola vez**). El agente la guarda en su
-config y la envía en cada heartbeat como `Authorization: Bearer <agentKey>`. No hay login
-ni JWT: la clave es la única identidad, y determina sobre qué activo puede escribir.
-
----
-
-## 9. Contrato de ingesta (la costura con el backend)
-
-Fuente autoritativa: el plan del backend (`plans/hygeia-asset-monitoring-backend.md` en el
-repo `Ellysia`). Reproducido aquí para que este repo sea autocontenido. Claves **camelCase**.
-
-`POST {serverUrl}/ingest` · `Authorization: Bearer <agentKey>` · JSON (gzip recomendado):
-
-```jsonc
-{
-  "agentVersion": "1.0.0",
-  "collectedAt": "2026-07-07T10:00:00Z",   // ISO-8601 UTC, reloj del agente
-  "host": {
-    "hostname": "web-01",
-    "os": "linux",
-    "kernel": "6.1.0",
-    "uptimeSec": 123456
-  },
-  "metrics": {
-    "cpu":    { "usagePct": 87.5, "loadAvg": [2.1, 1.8, 1.5], "ctxSwitches": 12345,
-                "perCorePct": [88, 91, 80, 90] },
-    "memory": { "totalBytes": 8589934592, "usedBytes": 7300000000, "usagePct": 85.0,
-                "swapUsedPct": 12.0 },
-    "disk":   [ { "mount": "/", "usagePct": 91.2, "freeBytes": 5000000000 } ],
-    "network":[ { "iface": "eth0", "rxBytesPerSec": 120000, "txBytesPerSec": 45000,
-                  "errIn": 0, "errOut": 0 } ],
-    "processes": { "total": 210, "zombie": 1,
-                   "topCpu": [ { "pid": 8123, "name": "xmrig", "cpuPct": 96.0 } ],
-                   "topMem": [ { "pid": 990, "name": "java", "memPct": 22.0 } ] }
-  },
-  "localAlerts": []   // opcional: anomalías pre-marcadas (la autoridad es el servidor)
-}
 ```
-
-Respuesta del backend (úsala para auto-ajustar el intervalo sin re-desplegar):
-
-```jsonc
-{ "ok": true, "nextIntervalSec": 15, "serverTime": "2026-07-07T10:00:01Z" }
+cmd/hygeia-agent/   el servicio
+cmd/hygeia-tray/    el companion de bandeja
+internal/           todo el código del agente (ver docs/DISENO.md §4)
+docs/               diseño, contrato de ingesta y análisis técnico
+installer/          empaquetado para Windows
+resources/          arte de marca
 ```
-
-**Reglas del contrato:**
-- El backend valida y **descarta lo desconocido**; enviar campos de más no rompe nada, pero
-  tampoco se persiste.
-- La identidad del activo la determina la **clave**, nunca un `assetId` del payload.
-- Versiona el payload con `agentVersion`; congela el esquema pronto y evoluciona por
-  extensión (campos nuevos opcionales), no por ruptura.

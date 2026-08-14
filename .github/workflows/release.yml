@@ -1,0 +1,112 @@
+name: Release
+
+# Solo por etiqueta. Una release es pública y en la práctica irreversible —en
+# cuanto alguien se ha descargado un fichero, retirarlo ya no lo desinstala—,
+# así que se dispara con un acto deliberado y no con cada push.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.25.x"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # goreleaser necesita el historial y las etiquetas completos para
+          # construir el registro de cambios; con el clon superficial que hace
+          # checkout por defecto, la release sale sin notas.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # La etiqueta manda sobre la versión que se compila, pero VERSION.txt es
+      # de donde la lee el instalador de Windows cuando se ejecuta a mano desde
+      # una máquina de desarrollo. Si divergen, se publica un instalador que
+      # dice una versión distinta de la que reportan los agentes que instala.
+      # Comprobarlo cuesta seis líneas.
+      - name: la etiqueta y VERSION.txt coinciden
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          file="$(tr -d '[:space:]' < VERSION.txt)"
+          if [ "$tag" != "$file" ]; then
+            echo "La etiqueta dice $tag y VERSION.txt dice $file."
+            echo "Actualiza VERSION.txt y vuelve a etiquetar."
+            exit 1
+          fi
+          echo "versión $tag"
+
+      - name: goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # El instalador de Windows va en su propio trabajo porque necesita un runner
+  # de Windows: Inno Setup no compila en Linux.
+  windows-installer:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      # build-installer.ps1 empotra un config.toml para que el cliente solo
+      # tenga que pegar su clave, y ese fichero no está en el repositorio
+      # porque lleva la URL del despliegue concreto. Se genera aquí a partir
+      # del ejemplo, con la URL en una variable del repositorio.
+      #
+      # Si la variable no está definida, se salta el instalador en vez de
+      # publicar uno que apunte al marcador de posición del ejemplo, que sería
+      # peor que no publicar ninguno: parece que funciona y no funciona.
+      - name: config.toml para el instalador
+        id: config
+        shell: bash
+        run: |
+          url="${{ vars.HYGEIA_SERVER_URL }}"
+          if [ -z "$url" ]; then
+            echo "buildable=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::La variable HYGEIA_SERVER_URL no está definida; no se publica el instalador de Windows."
+            exit 0
+          fi
+          sed "s|^serverUrl.*|serverUrl = \"$url\"|" config.example.toml > config.toml
+          grep '^serverUrl' config.toml
+          echo "buildable=true" >> "$GITHUB_OUTPUT"
+
+      - name: compilar el instalador
+        if: steps.config.outputs.buildable == 'true'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          .\installer\build-installer.ps1 -Version $version
+
+      - name: adjuntarlo a la release
+        if: steps.config.outputs.buildable == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          setup="installer/dist/hygeia-agent-setup-$version.exe"
+          if [ ! -f "$setup" ]; then
+            echo "No se generó $setup. ¿Falló Inno Setup?"
+            ls -la installer/dist || true
+            exit 1
+          fi
+          # La release la ha creado el trabajo anterior, en borrador.
+          gh release upload "$GITHUB_REF_NAME" "$setup" --clobber

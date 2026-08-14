@@ -1,0 +1,186 @@
+version: 2
+
+# Publicación de binarios para las cinco plataformas, sumas de verificación y
+# paquetes .deb/.rpm (F-08). Lo dispara .github/workflows/release.yml con una
+# etiqueta v*.
+#
+# Se usa goreleaser y no un flujo a mano porque hace ya todo lo que haría ese
+# flujo —matriz de compilación, archivos comprimidos, checksums.txt, paquetes
+# nativos y la release de GitHub— y hacerlo a mano serían unas ciento cincuenta
+# líneas de YAML con las mismas decisiones peor documentadas.
+#
+# LO QUE ESTE FICHERO NO HACE: firmar. Ver la sección "Firma" al final.
+
+project_name: hygeia-agent
+
+before:
+  hooks:
+    # Que una release no salga nunca de un go.mod desincronizado. Es -diff y
+    # no `tidy` a secas: aquí hay que fallar, no arreglar en silencio.
+    - go mod tidy -diff
+
+builds:
+  # El agente se compila en DOS entradas con los mismos ajustes, separadas
+  # solo por sistema operativo. No es duplicación gratuita: es lo que permite
+  # que el archivo de Windows lleve el agente Y el tray, y el del resto solo
+  # el agente, sin que goreleaser proteste por archivos con distinto número
+  # de binarios (ver la sección `archives`).
+  #
+  # CGO desactivado a propósito: sin él, un binario de Linux no depende de la
+  # glibc de la máquina donde se compiló y corre igual en una Debian vieja que
+  # en una Fedora nueva.
+  - id: agent-unix
+    main: ./cmd/hygeia-agent
+    binary: hygeia-agent
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version={{ .Version }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+  - id: agent-windows
+    main: ./cmd/hygeia-agent
+    binary: hygeia-agent
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version={{ .Version }}
+    goos: [windows]
+    # Windows en ARM no está en el plan y nadie lo ha pedido.
+    goarch: [amd64]
+
+  # El icono de bandeja, solo para Windows.
+  #
+  # No es un olvido: systray necesita cgo en macOS y un entorno de escritorio
+  # con GTK/D-Bus en Linux, así que compilarlo desde el runner de Ubuntu para
+  # esas dos plataformas exigiría un compilador cruzado de C. Y no hace falta:
+  # el README ya dice que un servidor headless corre hygeia-agent solo, y desde
+  # F-02 el alta y el diagnóstico se hacen por línea de órdenes. Si algún día
+  # hay demanda de bandeja en Linux, se añade aquí un goos más.
+  - id: tray-windows
+    main: ./cmd/hygeia-tray
+    binary: hygeia-tray
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      # -H=windowsgui: sin esto, el tray abre una consola negra al arrancar.
+      - -s -w -H=windowsgui
+      - -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version={{ .Version }}
+    goos: [windows]
+    goarch: [amd64]
+
+# En Windows, UN archivo con los dos ejecutables dentro.
+#
+# Es la misma idea que hace útil al instalador de Inno Setup: quien se lleva
+# Hygeia a un equipo de escritorio se lleva el agente y su icono de bandeja
+# juntos, no dos descargas que hay que emparejar a mano. El primer intento
+# los separó porque goreleaser rechaza un mismo archivo con dos binarios en
+# una plataforma y uno en otra; la respuesta correcta a eso es separar las
+# COMPILACIONES, no las descargas.
+#
+# En Linux y macOS el archivo lleva solo el agente, que es todo lo que hay
+# para esas plataformas.
+archives:
+  - id: unix
+    ids: [agent-unix]
+    name_template: "hygeia_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files:
+      - config.example.toml
+      - README.md
+      - CHANGELOG.md
+
+  - id: windows
+    ids: [agent-windows, tray-windows]
+    name_template: "hygeia_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [zip]
+    files:
+      - config.example.toml
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Paquetes nativos de Linux: instalar deja de ser "copia este binario y
+# ejecuta hygeia-agent install".
+nfpms:
+  - id: packages
+    ids: [agent-unix]
+    package_name: hygeia-agent
+    vendor: Ellysia
+    homepage: https://github.com/ProjectEllysia/HygeiaAgent
+    maintainer: Ellysia <soporte@ellysia.es>
+    description: |
+      Agente de monitorización de Ellysia Hygeia.
+      Recolecta métricas de salud del activo y su inventario de software, y
+      los envía al backend de Ellysia.
+    section: admin
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    contents:
+      # config|noreplace: en una actualización NO se pisa el config.toml del
+      # cliente. Ahí vive su agentKey, y sobrescribirlo lo dejaría sin dar de
+      # alta después de un `apt upgrade`.
+      - src: config.example.toml
+        dst: /etc/hygeia/config.toml
+        type: "config|noreplace"
+        file_info:
+          # La clave se guarda en este mismo fichero, así que no debe poder
+          # leerlo cualquier usuario de la máquina.
+          mode: 0600
+    scripts:
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+
+release:
+  # En borrador a propósito: una release es pública e irreversible en la
+  # práctica —la gente ya se ha descargado los ficheros—, y hasta que haya
+  # certificados de firma conviene mirar lo que sale antes de publicarlo.
+  # Cuando el proceso esté rodado, basta con quitar esta línea.
+  draft: true
+  name_template: "hygeia-agent {{ .Version }}"
+  footer: |
+    ## Verificación
+
+    `checksums.txt` trae el SHA-256 de cada fichero:
+
+    ```
+    sha256sum -c checksums.txt --ignore-missing
+    ```
+
+    **Estos binarios no están firmados.** Comprueba la suma antes de instalar;
+    en Windows, SmartScreen avisará al ejecutar el instalador.
+
+    ## Instalación en Linux
+
+    ```
+    sudo apt install ./hygeia-agent_{{ .Version }}_linux_amd64.deb
+    sudo systemctl start hygeia-agent
+    echo "$CLAVE" | sudo hygeia-agent enroll
+    ```
+
+# ---------------------------------------------------------------------------
+# Firma — PENDIENTE, y no por falta de configuración
+# ---------------------------------------------------------------------------
+#
+# Falta lo que no se puede resolver escribiendo YAML: los certificados.
+#
+#   Windows  Certificado de firma de código (idealmente EV, que es el que
+#            evita el aviso de SmartScreen desde el primer día). Se firma con
+#            osslsigncode o Azure Trusted Signing, en un bloque `signs:` con
+#            `ids: [default]`.
+#
+#   macOS    Certificado "Developer ID Application" de Apple, codesign, y
+#            notarización con notarytool. Es el más laborioso: sin notarizar,
+#            Gatekeeper bloquea el binario aunque esté firmado.
+#
+# Deliberadamente NO se deja aquí un bloque `signs:` desactivado a la espera
+# de secretos. Una configuración de firma que no se ha ejecutado nunca y que
+# se salta sola cuando falta el secreto es peor que no tenerla: da por hecho
+# que los binarios van firmados cuando no lo están. Mientras no haya
+# certificados, las notas de la release lo dicen con todas las letras.

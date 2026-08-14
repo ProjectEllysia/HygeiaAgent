@@ -1,10 +1,91 @@
 # Ejemplo de configuración del agente Hygeia.
-# Copia este fichero a "config.toml" y rellena serverUrl y agentKey.
+#
+# Ubicación real cuando corre como servicio (§6):
+#   Windows  C:\ProgramData\Hygeia\config.toml
+#   Linux    /etc/hygeia/config.toml
+#   macOS    /Library/Application Support/Hygeia/config.toml
+#
+# Override de la ruta con HYGEIA_CONFIG, y del directorio de estado completo
+# (config + buffer + log) con HYGEIA_DATA_DIR.
+#
 # Cualquier campo puede sobreescribirse con variables de entorno:
-#   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH
+#   HYGEIA_SERVER_URL, HYGEIA_AGENT_KEY, HYGEIA_INTERVAL_SEC, HYGEIA_BUFFER_PATH,
+#   HYGEIA_INVENTORY_INTERVAL_SEC, HYGEIA_BUFFER_MAX_ITEMS,
+#   HYGEIA_INVENTORY_MAX_ITEMS, HYGEIA_LOG_LEVEL
 
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
-agentKey    = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
+
+# agentKey es OPCIONAL en el fichero. Si falta, el agente arranca igualmente
+# en estado "sin configurar": no recolecta ni envía nada, y espera a que el
+# companion de bandeja (hygeia-tray) le pase la clave (§11.3). Así se puede
+# desplegar el binario antes de dar de alta el activo.
+#
+# Al guardarla por esa vía, el agente reescribe este fichero con permisos
+# restringidos (0600 en Unix, DACL solo para SYSTEM/Administradores/dueño en
+# Windows) y SIN los comentarios de esta plantilla.
+# agentKey  = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
+
 intervalSec = 15
-bufferPath  = "hygeia-buffer.jsonl"
 collectors  = ["cpu", "memory", "disk", "network", "processes"]
+
+# Cadencia del escaneo de software instalado, independiente de intervalSec:
+# el inventario cambia poco y escanearlo es más lento que el resto de
+# colectores, así que no viaja en cada heartbeat (se adjunta una sola vez
+# tras cada escaneo). Rango aceptado: 300s (5min) a 604800s (7 días).
+# inventoryIntervalSec = 21600
+
+# Máximo de aplicaciones que se reportan por escaneo. Debe quedar por DEBAJO
+# del tope del backend (features.hygeia.limits.maxInventoryItems, 2000 por
+# defecto): pasarse de ahí no cuesta el inventario, cuesta el heartbeat
+# entero, porque el backend lo rechaza con un error de validación. Si el
+# equipo tiene más aplicaciones, se ordenan por nombre y se envían las
+# primeras, dejando aviso en el log.
+# inventoryMaxItems = 1500
+
+# Por defecto, buffer.jsonl dentro del directorio de estado. Descoméntalo
+# solo si necesitas otra ubicación.
+# bufferPath = "C:/ProgramData/Hygeia/buffer.jsonl"
+
+# Cuántos heartbeats aplazados retiene el buffer en disco mientras el backend
+# no responde. Por defecto 1000: unas 4 horas con intervalSec = 15.
+#
+# El techo útil no lo pone este número, sino la ventana de backfill del
+# backend (features.hygeia.limits.maxBackfillSec, 24 h por defecto): un
+# payload más viejo que eso se rechaza al drenar, por muy bien guardado que
+# estuviera. Subirlo por encima de esa ventana solo gasta disco.
+# bufferMaxItems = 1000
+
+# Cuánto se escribe en hygeia-agent.log: debug, info (por defecto), warn o
+# error. En info se registran los cambios de estado (conectado -> error local
+# y viceversa), no cada heartbeat: una línea cada 15 s llenaba el fichero sin
+# aportar nada que no diga ya "último envío" en la bandeja.
+#
+# Ponlo en debug para diagnosticar un agente concreto en campo; recuerda
+# volver a info después. El fichero se rota solo al llegar a 5 MB, y se
+# conserva un único fichero anterior (hygeia-agent.log.1).
+# logLevel = "info"
+
+# --- Redes corporativas -----------------------------------------------------
+#
+# Los dos son opcionales. Sin ellos, el agente usa el transporte por defecto,
+# que ya respeta HTTP_PROXY, HTTPS_PROXY y NO_PROXY y el almacén de
+# certificados del sistema.
+#
+# proxyUrl hace falta cuando esas variables no bastan, que es el caso más
+# frecuente: un servicio de Windows corriendo como LocalSystem no hereda las
+# variables de entorno del usuario ni la configuración de proxy del navegador.
+# Admite credenciales en la propia URL.
+# proxyUrl = "http://usuario:clave@proxy.empresa.local:3128"
+
+# caFile es una autoridad de certificación ADICIONAL, en formato PEM. Se SUMA
+# al almacén del sistema, no lo sustituye: reemplazarlo dejaría al agente sin
+# confiar en ninguna autoridad pública, y funcionaría dentro de la oficina para
+# fallar en cuanto el equipo saliera de ella.
+#
+# Hace falta en redes con inspección TLS, donde el certificado que ve el agente
+# está emitido por la autoridad interna de la empresa. Sin esto, ahí el agente
+# no conecta en absoluto.
+#
+# Si el fichero no existe o no contiene certificados, el agente lo dice al
+# arrancar y se queda en error local, en vez de conectar sin él en silencio.
+# caFile = "C:/ProgramData/Hygeia/empresa-ca.pem"

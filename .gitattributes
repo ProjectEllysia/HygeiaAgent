@@ -1,2 +1,13 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Los ficheros Go se quedan en LF también en el árbol de trabajo: gofmt
+# considera CRLF un fichero mal formateado, y con "text=auto" a secas
+# `gofmt -l` marcaba en Windows ficheros cuyo blob estaba perfecto.
+*.go text eol=lf
+
+# Los guiones de empaquetado van DENTRO del .deb y del .rpm y los ejecuta el
+# gestor de paquetes de una máquina Linux. Con CRLF, la primera línea queda
+# como "#!/bin/sh\r" y la instalación falla con "bad interpreter". Compilar
+# una release desde Windows es suficiente para provocarlo.
+*.sh text eol=lf

@@ -27,8 +27,16 @@ go.work.sum
 # Real per-host config (contains the agentKey secret). Use config.example.toml as template.
 config.toml
 
-# Local agent artifacts
-hygeia-buffer.jsonl
-hygeia
-hygeia.exe
-hygeia-*
+# Local agent artifacts (built binaries at repo root, not the cmd/ source dirs)
+/hygeia-buffer.jsonl
+/hygeia
+/hygeia.exe
+/hygeia-agent
+/hygeia-agent.exe
+/hygeia-tray
+/hygeia-tray.exe
+
+# Salida de las dos herramientas de empaquetado: goreleaser escribe en dist/
+# y build-installer.ps1 en installer/dist/. Sin barra inicial, la regla vale
+# para las dos.
+dist/
