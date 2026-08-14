@@ -88,6 +88,27 @@ type Config struct {
 	// un agente concreto en campo, sin recompilar.
 	LogLevel string `toml:"logLevel"`
 
+	// ProxyURL y CAFile son para redes corporativas (F-09). Los dos
+	// opcionales: sin ellos, el agente usa el transporte por defecto de Go,
+	// que ya respeta HTTP_PROXY/HTTPS_PROXY/NO_PROXY y el almacén de
+	// certificados del sistema.
+	//
+	// ProxyURL existe porque esas variables de entorno no bastan en el caso
+	// que más se da: un servicio de Windows corriendo como LocalSystem no
+	// hereda las variables del usuario ni la configuración de proxy del
+	// navegador. Admite credenciales en la propia URL
+	// (http://usuario:clave@proxy.empresa.local:3128).
+	ProxyURL string `toml:"proxyUrl"`
+
+	// CAFile es una autoridad de certificación ADICIONAL, en PEM. Se suma al
+	// almacén del sistema, nunca lo sustituye — ver shipper.caPool.
+	//
+	// Sin esto, en una red con inspección TLS el agente no puede conectar en
+	// absoluto: el certificado que ve está emitido por la autoridad interna
+	// de la empresa, y rechazar certificados inválidos no es negociable en un
+	// producto de seguridad. Es un bloqueo total, no una degradación.
+	CAFile string `toml:"caFile"`
+
 	// path recuerda de dónde se cargó, para que Save() reescriba el mismo
 	// fichero sin que el caller tenga que arrastrar la ruta.
 	path string `toml:"-"`
@@ -275,6 +296,12 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv("HYGEIA_LOG_LEVEL"); v != "" {
 		c.LogLevel = v
+	}
+	if v := os.Getenv("HYGEIA_PROXY_URL"); v != "" {
+		c.ProxyURL = v
+	}
+	if v := os.Getenv("HYGEIA_CA_FILE"); v != "" {
+		c.CAFile = v
 	}
 	if v := os.Getenv("HYGEIA_INVENTORY_MAX_ITEMS"); v != "" {
 		n, err := strconv.Atoi(v)

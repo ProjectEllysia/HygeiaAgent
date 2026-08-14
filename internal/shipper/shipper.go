@@ -6,10 +6,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -38,15 +42,106 @@ type Shipper struct {
 	maxBackoff     time.Duration
 }
 
-func NewShipper(serverURL, agentKey string) *Shipper {
+// clientTimeout acota una petición completa, incluido el cuerpo.
+const clientTimeout = 15 * time.Second
+
+// Options son los ajustes de red para entornos corporativos (F-09). Los dos
+// campos son opcionales y lo normal es que vengan vacíos.
+type Options struct {
+	// ProxyURL fuerza un proxy concreto. Vacío deja el comportamiento por
+	// defecto de Go, que ya respeta HTTP_PROXY/HTTPS_PROXY/NO_PROXY.
+	ProxyURL string
+	// CAFile es una autoridad de certificación adicional en PEM.
+	CAFile string
+}
+
+// NewShipper construye el emisor. Devuelve error si los ajustes de red son
+// inválidos —un proxy mal escrito, un fichero de CA que no existe o que no
+// contiene certificados— en vez de arrancar con una configuración a medio
+// aplicar: si alguien ha puesto un caFile, conectar sin él no es "funcionar",
+// es fallar más tarde y con un error de certificado que no menciona la causa.
+func NewShipper(serverURL, agentKey string, opts Options) (*Shipper, error) {
+	client, err := newHTTPClient(opts)
+	if err != nil {
+		return nil, err
+	}
 	return &Shipper{
 		serverURL:      serverURL,
 		agentKey:       agentKey,
-		client:         &http.Client{Timeout: 15 * time.Second},
+		client:         client,
 		maxRetries:     defaultMaxRetries,
 		initialBackoff: defaultInitialBackoff,
 		maxBackoff:     defaultMaxBackoff,
+	}, nil
+}
+
+func newHTTPClient(opts Options) (*http.Client, error) {
+	// Sin ajustes, no se construye transporte propio: el de Go ya respeta las
+	// variables de entorno de proxy y el almacén del sistema, y clonarlo para
+	// no cambiar nada solo añadiría superficie donde equivocarse.
+	if opts.ProxyURL == "" && opts.CAFile == "" {
+		return &http.Client{Timeout: clientTimeout}, nil
 	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	if opts.ProxyURL != "" {
+		proxy, err := url.Parse(opts.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("shipper: proxyUrl inválido %q: %w", opts.ProxyURL, err)
+		}
+		// url.Parse acepta casi cualquier cosa: "proxy.empresa.local:3128"
+		// se analiza sin error como esquema "proxy.empresa.local" y opaco
+		// "3128", y luego el proxy simplemente no se usa, en silencio.
+		if proxy.Scheme == "" || proxy.Host == "" {
+			return nil, fmt.Errorf(
+				"shipper: proxyUrl %q no lleva esquema y host; se esperaba algo como http://proxy.empresa.local:3128",
+				opts.ProxyURL)
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+	}
+
+	if opts.CAFile != "" {
+		pool, err := caPool(opts.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		transport.TLSClientConfig.RootCAs = pool
+	}
+
+	return &http.Client{Timeout: clientTimeout, Transport: transport}, nil
+}
+
+// caPool devuelve el almacén de certificados del sistema MÁS el de path.
+//
+// Aditivo, nunca sustitutivo, y esto es lo importante de la función: poner
+// RootCAs con solo el certificado corporativo dejaría al agente sin confiar
+// en ninguna autoridad pública. Funcionaría mientras el servidor estuviera
+// detrás de la inspección TLS de la empresa y dejaría de funcionar en cuanto
+// no lo estuviera —un portátil fuera de la oficina, por ejemplo— con un error
+// de certificado que nadie relacionaría con esta línea.
+func caPool(path string) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("shipper: leyendo el almacén de certificados del sistema: %w", err)
+	}
+
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("shipper: leyendo caFile: %w", err)
+	}
+	// AppendCertsFromPEM no devuelve error, devuelve false si no añadió
+	// nada. Sin comprobarlo, apuntar caFile a un fichero DER, a un PEM
+	// truncado o a un fichero de texto cualquiera se aceptaría en silencio y
+	// el fallo aparecería después como un error de certificado.
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf(
+			"shipper: caFile %q no contiene ningún certificado PEM válido (¿está en formato DER?)", path)
+	}
+	return pool, nil
 }
 
 // IngestResponse es la respuesta del backend (README §9).

@@ -79,12 +79,28 @@ func New(log *slog.Logger, cfg *config.Config) *Agent {
 		state:      control.StateUnconfigured,
 	}
 	if cfg.IsConfigured() {
-		a.shp = shipper.NewShipper(cfg.ServerURL, cfg.AgentKey)
+		shp, err := shipper.NewShipper(cfg.ServerURL, cfg.AgentKey, shipperOptions(cfg))
+		if err != nil {
+			// Los ajustes de red están mal (proxy o CA). El agente arranca
+			// igualmente y se queda en error local: así el tray, `info` y
+			// `doctor` pueden DECIR qué pasa. Negarse a arrancar dejaría al
+			// operador sin ninguna de las tres formas de averiguarlo.
+			log.Error("configuración de red inválida, no se enviará nada", "err", err)
+			a.state = control.StateLocalError
+			a.lastError = err.Error()
+			return a
+		}
+		a.shp = shp
 		// Configurado, pero todavía sin heartbeat: no es "conectado" hasta
 		// que el backend responda que sí.
 		a.state = control.StateStarting
 	}
 	return a
+}
+
+// shipperOptions traduce la configuración a los ajustes de red del emisor.
+func shipperOptions(cfg *config.Config) shipper.Options {
+	return shipper.Options{ProxyURL: cfg.ProxyURL, CAFile: cfg.CAFile}
 }
 
 // Status construye la respuesta de GET /status (§11.4).
@@ -129,7 +145,19 @@ func (a *Agent) Enroll(agentKey string) error {
 		return fmt.Errorf("no se pudo guardar la clave: %w", err)
 	}
 
-	a.shp = shipper.NewShipper(a.cfg.ServerURL, agentKey)
+	shp, err := shipper.NewShipper(a.cfg.ServerURL, agentKey, shipperOptions(a.cfg))
+	if err != nil {
+		// La clave ya está guardada y es correcta; lo que está mal es el
+		// proxy o la CA. Se dice tal cual, porque el mensaje llega al
+		// diálogo del tray y a la salida de `hygeia-agent enroll`, y
+		// "no se pudo dar de alta" a secas mandaría a buscar en el sitio
+		// equivocado.
+		a.state = control.StateLocalError
+		a.lastError = err.Error()
+		return fmt.Errorf("clave guardada, pero la configuración de red es inválida: %w", err)
+	}
+
+	a.shp = shp
 	// Igual que en New: dar de alta no prueba que el backend responda. El
 	// primer ciclo resolverá a connected o local_error.
 	a.state = control.StateStarting
