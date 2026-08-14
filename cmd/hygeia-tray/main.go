@@ -246,10 +246,18 @@ func refresh(client *control.Client, m *menu) {
 	// es su complemento exacto: solo tiene sentido cuando SÍ hay algo que
 	// borrar (p. ej. una clave inválida que deja el agente en rojo sin ni
 	// siquiera ofrecer el enrollment, porque cree que ya está configurado).
-	if st.State == control.StateUnconfigured {
+	switch st.State {
+	case control.StateUnconfigured:
 		m.enroll.Show()
 		m.reset.Hide()
-	} else {
+	case control.StateKeyRejected:
+		// Desde F-03 se puede pegar la clave nueva directamente, sin pasar
+		// antes por "Reestablecer": el servicio acepta el enrollment cuando
+		// él mismo ha marcado la clave como rechazada. Se deja también el
+		// reset a mano, que sigue siendo una salida válida.
+		m.enroll.Show()
+		m.reset.Show()
+	default:
 		m.enroll.Hide()
 		m.reset.Show()
 	}
@@ -343,6 +351,11 @@ func stateLabel(state string) string {
 		return "sin configurar"
 	case control.StateStarting:
 		return "iniciando…"
+	case control.StateKeyRejected:
+		// Dice qué pasa y qué hacer. Antes esto se veía como "error local"
+		// con el texto "backend devolvió status 401", que no es ninguna de
+		// las dos cosas.
+		return "clave rechazada — pide una nueva en Ellysia"
 	default:
 		return "desconocido"
 	}

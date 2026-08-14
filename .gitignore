@@ -36,5 +36,7 @@ config.toml
 /hygeia-tray
 /hygeia-tray.exe
 
-# Artefactos generados por installer/build-installer.ps1 (binarios, .iss, setup.exe)
-/installer/dist/
+# Salida de las dos herramientas de empaquetado: goreleaser escribe en dist/
+# y build-installer.ps1 en installer/dist/. Sin barra inicial, la regla vale
+# para las dos.
+dist/

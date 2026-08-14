@@ -48,6 +48,15 @@ var (
 const (
 	stateConnected  = "connected"
 	stateLocalError = "local_error"
+	// key_rejected comparte el icono rojo con local_error: son problemas
+	// distintos —uno es la credencial y el otro la máquina— pero los dos
+	// significan lo mismo de un vistazo, que es para lo que sirve el icono:
+	// este activo NO está reportando y hace falta hacer algo. La diferencia
+	// la cuenta el texto del menú, que sí tiene sitio para explicarla.
+	//
+	// Sin esta línea caería en el default y saldría el gris de "sin
+	// configurar", que diría justo lo contrario de lo que pasa.
+	stateKeyRejected = "key_rejected"
 	// "starting" y "unconfigured" comparten el icono gris: en ambos el
 	// agente está vivo pero todavía no reporta nada al backend.
 )
@@ -89,7 +98,7 @@ func ForState(state string) []byte {
 	switch state {
 	case stateConnected:
 		return Connected()
-	case stateLocalError:
+	case stateLocalError, stateKeyRejected:
 		return LocalError()
 	default:
 		return Unconfigured()

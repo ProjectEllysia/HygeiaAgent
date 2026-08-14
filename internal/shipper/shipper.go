@@ -6,10 +6,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"time"
 
@@ -38,15 +42,116 @@ type Shipper struct {
 	maxBackoff     time.Duration
 }
 
-func NewShipper(serverURL, agentKey string) *Shipper {
+// clientTimeout acota una petición completa, incluido el cuerpo.
+const clientTimeout = 15 * time.Second
+
+// Options son los ajustes de red para entornos corporativos (F-09). Los dos
+// campos son opcionales y lo normal es que vengan vacíos.
+type Options struct {
+	// ProxyURL fuerza un proxy concreto. Vacío deja el comportamiento por
+	// defecto de Go, que ya respeta HTTP_PROXY/HTTPS_PROXY/NO_PROXY.
+	ProxyURL string
+	// CAFile es una autoridad de certificación adicional en PEM.
+	CAFile string
+}
+
+// NewShipper construye el emisor. Devuelve error si los ajustes de red son
+// inválidos —un proxy mal escrito, un fichero de CA que no existe o que no
+// contiene certificados— en vez de arrancar con una configuración a medio
+// aplicar: si alguien ha puesto un caFile, conectar sin él no es "funcionar",
+// es fallar más tarde y con un error de certificado que no menciona la causa.
+func NewShipper(serverURL, agentKey string, opts Options) (*Shipper, error) {
+	client, err := newHTTPClient(opts)
+	if err != nil {
+		return nil, err
+	}
 	return &Shipper{
 		serverURL:      serverURL,
 		agentKey:       agentKey,
-		client:         &http.Client{Timeout: 15 * time.Second},
+		client:         client,
 		maxRetries:     defaultMaxRetries,
 		initialBackoff: defaultInitialBackoff,
 		maxBackoff:     defaultMaxBackoff,
+	}, nil
+}
+
+// NewHTTPClient construye el cliente HTTP con los ajustes de red dados.
+//
+// Exportado para el subcomando `doctor`: si doctor montara su propio cliente,
+// podría decir que el proxy y la CA están bien usando una configuración
+// distinta de la que usa el servicio, que es exactamente el fallo que se
+// supone que evita.
+func NewHTTPClient(opts Options) (*http.Client, error) {
+	return newHTTPClient(opts)
+}
+
+func newHTTPClient(opts Options) (*http.Client, error) {
+	// Sin ajustes, no se construye transporte propio: el de Go ya respeta las
+	// variables de entorno de proxy y el almacén del sistema, y clonarlo para
+	// no cambiar nada solo añadiría superficie donde equivocarse.
+	if opts.ProxyURL == "" && opts.CAFile == "" {
+		return &http.Client{Timeout: clientTimeout}, nil
 	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+
+	if opts.ProxyURL != "" {
+		proxy, err := url.Parse(opts.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("shipper: proxyUrl inválido %q: %w", opts.ProxyURL, err)
+		}
+		// url.Parse acepta casi cualquier cosa: "proxy.empresa.local:3128"
+		// se analiza sin error como esquema "proxy.empresa.local" y opaco
+		// "3128", y luego el proxy simplemente no se usa, en silencio.
+		if proxy.Scheme == "" || proxy.Host == "" {
+			return nil, fmt.Errorf(
+				"shipper: proxyUrl %q no lleva esquema y host; se esperaba algo como http://proxy.empresa.local:3128",
+				opts.ProxyURL)
+		}
+		transport.Proxy = http.ProxyURL(proxy)
+	}
+
+	if opts.CAFile != "" {
+		pool, err := caPool(opts.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		if transport.TLSClientConfig == nil {
+			transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		transport.TLSClientConfig.RootCAs = pool
+	}
+
+	return &http.Client{Timeout: clientTimeout, Transport: transport}, nil
+}
+
+// caPool devuelve el almacén de certificados del sistema MÁS el de path.
+//
+// Aditivo, nunca sustitutivo, y esto es lo importante de la función: poner
+// RootCAs con solo el certificado corporativo dejaría al agente sin confiar
+// en ninguna autoridad pública. Funcionaría mientras el servidor estuviera
+// detrás de la inspección TLS de la empresa y dejaría de funcionar en cuanto
+// no lo estuviera —un portátil fuera de la oficina, por ejemplo— con un error
+// de certificado que nadie relacionaría con esta línea.
+func caPool(path string) (*x509.CertPool, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("shipper: leyendo el almacén de certificados del sistema: %w", err)
+	}
+
+	pem, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("shipper: leyendo caFile: %w", err)
+	}
+	// AppendCertsFromPEM no devuelve error, devuelve false si no añadió
+	// nada. Sin comprobarlo, apuntar caFile a un fichero DER, a un PEM
+	// truncado o a un fichero de texto cualquiera se aceptaría en silencio y
+	// el fallo aparecería después como un error de certificado.
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf(
+			"shipper: caFile %q no contiene ningún certificado PEM válido (¿está en formato DER?)", path)
+	}
+	return pool, nil
 }
 
 // IngestResponse es la respuesta del backend (README §9).
@@ -97,6 +202,36 @@ type ThrottledError struct {
 func (e *ThrottledError) Error() string {
 	return fmt.Sprintf("shipper: backend rechazó el heartbeat por cadencia (status %d), esperar %s",
 		e.StatusCode, e.RetryAfter)
+}
+
+// AuthError indica que el backend rechazó la CLAVE (401 o 403), no el
+// payload ni por cadencia. Es el cuarto y último tipo de fallo del shipper.
+//
+// Lo produce sobre todo la rotación de claves del servidor
+// (POST /hygeia/assets/{id}/rotate-key), que invalida la anterior en el acto.
+//
+// Pide una reacción propia por dos motivos:
+//
+//   - Reintentar no tiene sentido. La misma clave va a dar el mismo 401, así
+//     que los cuatro intentos con espera exponencial son tiempo tirado.
+//   - Guardar el payload en el buffer tampoco. Solo se entregaría si alguien
+//     se entera, pide una clave nueva y la aplica ANTES de que el heartbeat
+//     envejezca más allá de la ventana de backfill del backend; mientras
+//     tanto, el buffer se llena de payloads condenados y no queda sitio para
+//     una caída de red de verdad. Lo que hace falta es que se ENTERE, y de
+//     eso se encarga el estado key_rejected.
+//
+// No se clasifica como PermanentError precisamente porque el payload no
+// tiene nada de malo: con una clave válida se entregaría sin problema. Lo que
+// caduca no es el dato, es la credencial.
+type AuthError struct {
+	StatusCode int
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf(
+		"shipper: el backend rechazó la clave de agente (status %d); ha sido revocada o rotada",
+		e.StatusCode)
 }
 
 // defaultThrottleWait es cuánto esperar cuando el backend responde 429 pero
@@ -152,10 +287,12 @@ func clampThrottleWait(d time.Duration) time.Duration {
 }
 
 // isPermanentStatus identifica los códigos donde el problema es el propio
-// cuerpo de la petición, no la disponibilidad del backend. 401 (clave
-// inválida) queda fuera a propósito: no es el payload lo que falla, y tras
-// un Reset+Enroll con una clave correcta el mismo payload sí podría
-// entregarse — por eso sigue tratándose como transitorio (§7, agent.Reset).
+// cuerpo de la petición, no la disponibilidad del backend.
+//
+// 401 y 403 quedan fuera, y siguen fuera: no es el payload lo que falla, y
+// con una clave válida ese mismo payload se entregaría. Lo que caduca es la
+// credencial, no el dato. Van por AuthError, que es un tipo aparte porque
+// pide una reacción distinta de las otras dos (ver isAuthStatus).
 func isPermanentStatus(code int) bool {
 	switch code {
 	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
@@ -163,6 +300,13 @@ func isPermanentStatus(code int) bool {
 	default:
 		return false
 	}
+}
+
+// isAuthStatus son los códigos con los que el backend dice que la clave no
+// vale. 407 NO está: ese lo devuelve un proxy pidiendo sus propias
+// credenciales, que es un problema de red y no de la clave de agente.
+func isAuthStatus(code int) bool {
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
 }
 
 // Send serializa el payload, lo gzip-comprime y hace POST al backend con
@@ -221,6 +365,14 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 				throttled := newThrottledError(resp)
 				_ = resp.Body.Close()
 				return nil, throttled
+			}
+			// Sin reintentos tampoco: la misma clave va a dar el mismo 401
+			// las cuatro veces. Un proxy que pida autenticación responde 407,
+			// no 401, así que aquí no hay ambigüedad: quien rechaza la
+			// credencial es el backend (F-03).
+			if isAuthStatus(resp.StatusCode) {
+				_ = resp.Body.Close()
+				return nil, &AuthError{StatusCode: resp.StatusCode}
 			}
 			_ = resp.Body.Close()
 			if isPermanentStatus(resp.StatusCode) {

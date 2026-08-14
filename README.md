@@ -45,7 +45,7 @@ llegue la clave.
 ## Compilar
 
 ```bash
-go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.4" ./cmd/hygeia-agent
+go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.5" ./cmd/hygeia-agent
 ```
 
 El tray, en Windows, sin ventana de consola:
@@ -61,12 +61,115 @@ Sin `-ldflags`, el binario reporta la versión `0.1.0-dev` al backend.
 | `hygeia-agent` | ✅ | ✅ | ✅ (cross-compila) |
 | `hygeia-tray` | ✅ | ✅ | requiere cgo y toolchain nativo |
 
-En Windows hay además un instalador de doble clic, que empaqueta ambos binarios con el
-`serverUrl` ya relleno:
+## Compilar los paquetes de distribución
+
+Dos herramientas, cada una para lo suyo. Ninguna de las dos escribe en el repositorio: `dist/`
+e `installer/dist/` están ignoradas.
+
+### Todo, para las cinco plataformas
+
+```bash
+goreleaser release --snapshot --clean --skip=publish
+```
+
+Unos siete segundos. Deja en `dist/` los binarios, los archivos `.tar.gz`/`.zip`, los paquetes
+`.deb` y `.rpm` y `checksums.txt`. Es exactamente lo que hará la CI al publicar, así que sirve
+para comprobar una release antes de etiquetar.
+
+### El instalador de Windows
 
 ```powershell
 .\installer\build-installer.ps1
 ```
+
+Compila los dos `.exe`, genera el script de Inno Setup y produce
+`installer/dist/hygeia-agent-setup-<version>.exe`. Requiere:
+
+- Un `config.toml` en la raíz del repositorio, del que toma el `serverUrl` que se empotra en el
+  instalador. **No está en el repositorio** (lleva datos del despliegue): sale de
+  `cp config.example.toml config.toml`.
+- Inno Setup. Si no lo encuentra, intenta instalarlo con WinGet, y si tampoco puede deja el
+  `.iss` listo para compilarlo a mano.
+
+La versión sale de `VERSION.txt`, o de `-Version 1.2.3` para una prueba puntual.
+
+Del `config.toml` empotrado se quitan dos campos a propósito: la `agentKey` —distribuir la del
+desarrollador filtraría esa clave a todos los clientes y los haría colisionar sobre el mismo
+activo— y el `bufferPath`, que si es relativo se resolvería contra el directorio de trabajo del
+servicio y rompería el buffer.
+
+### Por qué son dos herramientas y no una
+
+Compilar los binarios de Windows dos veces cuesta segundos y no merece la pena unificarlo. Lo
+que hace el instalador no lo hace goreleaser: para el servicio y cierra el tray antes de
+sobrescribir los ejecutables (si no, están bloqueados y la copia falla), registra el arranque
+del tray para la sesión del usuario en vez de para el token elevado del instalador, y no pisa
+el `config.toml` del cliente al actualizar.
+
+## Publicar una versión
+
+```bash
+# 1. VERSION.txt y la etiqueta TIENEN que coincidir: hay un guardián en la CI.
+echo 1.0.6 > VERSION.txt
+git commit -am "chore: versión 1.0.6"
+
+# 2. Etiquetar y empujar. Esto es lo que dispara la publicación.
+git tag v1.0.6
+git push origin main --tags
+```
+
+El flujo compila las cinco plataformas, genera los paquetes y las sumas, ejecuta
+`build-installer.ps1` en un runner de Windows, adjunta el `.exe` resultante y crea la release
+**en borrador**. Queda revisarla en GitHub y darle a publicar.
+
+Para que el instalador se genere en la CI hace falta definir la variable de repositorio
+`HYGEIA_SERVER_URL` (Settings → Secrets and variables → Actions → Variables). Sin ella ese paso
+se salta con un aviso, en vez de publicar un instalador que apunte al marcador de posición del
+ejemplo.
+
+## Instalar desde una release
+
+Cada etiqueta `v*` publica en GitHub binarios para `linux/amd64`, `linux/arm64`,
+`windows/amd64`, `darwin/amd64` y `darwin/arm64`, paquetes `.deb` y `.rpm`, el instalador de
+Windows y un `checksums.txt`.
+
+| Fichero | Qué lleva dentro |
+|---|---|
+| `hygeia-agent-setup-<version>.exe` | **La forma normal de instalar en Windows.** Instalador de doble clic: los dos binarios, el `serverUrl` ya relleno, el servicio registrado y el tray en el arranque de sesión. |
+| `hygeia_<version>_windows_amd64.zip` | Los mismos dos ejecutables sueltos, para despliegue automatizado sin interfaz. |
+| `hygeia_<version>_linux_*.tar.gz` · `hygeia_<version>_darwin_*.tar.gz` | Solo `hygeia-agent`: fuera de Windows no se distribuye el tray. |
+| `hygeia-agent_<version>_linux_*.deb` · `.rpm` | Paquetes nativos, con el servicio registrado al instalar. |
+
+**Los binarios todavía no están firmados.** Comprueba la suma antes de instalar, y cuenta con el
+aviso de SmartScreen en Windows:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+En Debian, Ubuntu y derivadas:
+
+```bash
+sudo apt install ./hygeia-agent_<version>_linux_amd64.deb
+```
+
+En Fedora, RHEL y derivadas:
+
+```bash
+sudo dnf install ./hygeia-agent_<version>_linux_amd64.rpm
+```
+
+El paquete deja el binario en `/usr/bin`, la configuración en `/etc/hygeia/config.toml` (con
+permisos `0600`, porque ahí acaba la clave del agente) y registra el servicio. Después queda
+poner la URL del servidor, arrancar y dar de alta:
+
+```bash
+sudo systemctl start hygeia-agent
+echo "$CLAVE_DE_AGENTE" | sudo hygeia-agent enroll
+```
+
+Una actualización conserva `config.toml` —y con él la clave— y reinicia el servicio solo si
+estaba en marcha.
 
 ## Instalar como servicio
 
@@ -133,10 +236,56 @@ Un agente puede estar perfectamente en ejecución y llevar horas sin poder entre
 heartbeat; `info` enseña el estado de conexión, cuántos payloads hay en el buffer, cuándo fue
 el último envío y el último error.
 
+Y cuando la respuesta es "no está reportando" y hace falta saber **por qué**:
+
+```bash
+hygeia-agent doctor
+```
+
+Comprueba, en el orden en que se descartan las causas: el fichero de configuración y sus
+permisos, la URL, el formato de la clave, el proxy y la CA propia, la resolución DNS, la
+conectividad TCP, el certificado TLS y su caducidad, si el servidor acepta la clave, la
+desviación del reloj, y el estado del servicio. Cada fallo lleva debajo qué hacer, y el código de
+salida es distinto de cero si algo va mal, para poder usarlo desde un script de despliegue.
+
+No imprime nunca el secreto de la clave ni la contraseña del proxy: esta salida es lo primero
+que se pega en un ticket de soporte.
+
 Para las interioridades del proceso, sin buscar el fichero de log:
 
 ```bash
 hygeia-agent debug
+```
+
+## Redes corporativas
+
+Si la red obliga a pasar por un proxy, o inspecciona el tráfico TLS con una autoridad de
+certificación propia, hay dos campos en `config.toml`:
+
+```toml
+proxyUrl = "http://usuario:clave@proxy.empresa.local:3128"
+caFile   = "C:/ProgramData/Hygeia/empresa-ca.pem"
+```
+
+Sin `caFile`, en una red con inspección TLS el agente **no puede conectar en absoluto**: el
+certificado que ve está emitido por la autoridad interna, y rechazar certificados inválidos no
+es negociable en un producto de seguridad. El certificado indicado se **suma** al almacén del
+sistema, nunca lo sustituye, para que el agente siga funcionando fuera de la oficina.
+
+`proxyUrl` hace falta aunque estén definidas `HTTP_PROXY` y `HTTPS_PROXY`: un servicio de Windows
+corriendo como `LocalSystem` no hereda las variables de entorno del usuario.
+
+`hygeia-agent doctor` comprueba los dos con la misma configuración que usa el servicio.
+
+## Si Ellysia rota la clave
+
+Rotar una clave desde Ellysia invalida la anterior de inmediato. El agente lo detecta, deja de
+enviar —no llena el buffer con lo que ya no se puede entregar— y el icono de bandeja pasa a rojo
+con el texto "clave rechazada". La nueva se aplica directamente, sin necesidad de reestablecer
+nada antes:
+
+```bash
+echo "$CLAVE_NUEVA" | hygeia-agent enroll
 ```
 
 ## Instalar el icono de bandeja

@@ -70,6 +70,9 @@ func runCommand(buildService func() (service.Service, error), args []string) err
 	case "info":
 		return runInfo()
 
+	case "doctor":
+		return runDoctor()
+
 	case "debug":
 		return runDebug()
 
@@ -310,6 +313,8 @@ Alta y diagnóstico (hablan con el agente en marcha):
                     argumento queda visible en ` + "`ps`" + `
   reset [--yes]     borra la clave; el agente deja de reportar
   info              estado del propio agente: conexión, buffer, último envío
+  doctor            comprueba por qué no llega: config, DNS, TCP, TLS, clave,
+                    reloj y buffer, con un consejo por cada fallo
   debug             interioridades del proceso: goroutines, memoria, log reciente
 
   version
@@ -317,4 +322,5 @@ Alta y diagnóstico (hablan con el agente en marcha):
 Ejemplos:
   echo "$CLAVE" | hygeia-agent enroll
   hygeia-agent info
+  hygeia-agent doctor
 `

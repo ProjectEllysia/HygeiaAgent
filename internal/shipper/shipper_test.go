@@ -15,6 +15,18 @@ import (
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
+// mustShipper construye un emisor sin ajustes de red, que es lo que quieren
+// casi todas las pruebas. Los ajustes de F-09 (proxy y CA propia) tienen sus
+// propias pruebas más abajo.
+func mustShipper(t *testing.T, serverURL, agentKey string) *Shipper {
+	t.Helper()
+	s, err := NewShipper(serverURL, agentKey, Options{})
+	if err != nil {
+		t.Fatalf("NewShipper() error = %v", err)
+	}
+	return s
+}
+
 // fastBackoff acorta el backoff exponencial para que los tests de reintento
 // corran en milisegundos en vez de minutos reales.
 func fastBackoff(s *Shipper) {
@@ -76,7 +88,7 @@ func TestSendSuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL+"/hygeia", "secreto123")
+	s := mustShipper(t, srv.URL+"/hygeia", "secreto123")
 	resp, err := s.Send(context.Background(), testPayload())
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
@@ -97,7 +109,7 @@ func TestSendRetriesThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s)
 
 	resp, err := s.Send(context.Background(), testPayload())
@@ -120,7 +132,7 @@ func TestSendExhaustsRetriesOnPersistentError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s) // maxRetries = 2 => 3 intentos en total
 
 	_, err := s.Send(context.Background(), testPayload())
@@ -141,7 +153,7 @@ func TestSendRespectsContextCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	s.maxRetries = 100
 	s.initialBackoff = 1 * time.Minute // deliberadamente largo: si el ctx no cortara, el test colgaría
 	s.maxBackoff = 1 * time.Minute
@@ -174,7 +186,7 @@ func TestSendFailsFastOnPermanentStatus(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			s := NewShipper(srv.URL, "k")
+			s := mustShipper(t, srv.URL, "k")
 			fastBackoff(s)
 
 			_, err := s.Send(context.Background(), testPayload())
@@ -198,7 +210,16 @@ func TestSendFailsFastOnPermanentStatus(t *testing.T) {
 // 401 (clave inválida) NO es un PermanentError: el problema es la clave, no
 // el payload — tras un Reset+Enroll con clave correcta el mismo dato sí
 // podría entregarse, así que debe seguir tratándose como transitorio.
-func TestSendUnauthorizedIsNotPermanent(t *testing.T) {
+// 401 sigue SIN ser un PermanentError, y por el mismo motivo de siempre: el
+// payload no tiene nada de malo y con una clave válida se entregaría. Lo que
+// caduca es la credencial, no el dato.
+//
+// Lo que sí cambió con F-03 es que ya no se reintenta. Esta prueba pedía
+// antes maxRetries+1 intentos ("401 sí reintenta"); eran cuatro peticiones
+// con espera exponencial contra un servidor que iba a responder lo mismo las
+// cuatro veces. Ahora es un AuthError, que tiene su propia reacción en el
+// agente: ni reintento, ni buffer, y estado key_rejected.
+func TestSendUnauthorizedIsAuthNotPermanent(t *testing.T) {
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
@@ -206,8 +227,8 @@ func TestSendUnauthorizedIsNotPermanent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
-	fastBackoff(s) // maxRetries = 2 => 3 intentos en total
+	s := mustShipper(t, srv.URL, "k")
+	fastBackoff(s)
 
 	_, err := s.Send(context.Background(), testPayload())
 	if err == nil {
@@ -217,8 +238,12 @@ func TestSendUnauthorizedIsNotPermanent(t *testing.T) {
 	if errors.As(err, &permErr) {
 		t.Fatal("401 se clasificó como PermanentError, no debería")
 	}
-	if got := attempts.Load(); got != int32(s.maxRetries+1) {
-		t.Errorf("intentos = %d, se esperaban %d (401 sí reintenta)", got, s.maxRetries+1)
+	var authErr *AuthError
+	if !errors.As(err, &authErr) {
+		t.Fatalf("Send() error = %T, se esperaba *AuthError", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Errorf("intentos = %d, se esperaba 1: reintentar la misma clave da el mismo 401", got)
 	}
 }
 
@@ -229,7 +254,7 @@ func TestSendMalformedResponseBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	if _, err := s.Send(context.Background(), testPayload()); err == nil {
 		t.Fatal("Send() = nil, se esperaba error al decodificar una respuesta 200 no-JSON")
 	}
@@ -248,7 +273,7 @@ func TestSendDoesNotRetryOnThrottle(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s)
 
 	_, err := s.Send(context.Background(), testPayload())
@@ -275,7 +300,7 @@ func TestSendPrefersRetryAfterHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s)
 
 	_, err := s.Send(context.Background(), testPayload())
@@ -300,7 +325,7 @@ func TestSendFallsBackToDefaultThrottleWait(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s)
 
 	_, err := s.Send(context.Background(), testPayload())
@@ -323,7 +348,7 @@ func TestSendClampsAbsurdRetryAfter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	s := NewShipper(srv.URL, "k")
+	s := mustShipper(t, srv.URL, "k")
 	fastBackoff(s)
 
 	_, err := s.Send(context.Background(), testPayload())
