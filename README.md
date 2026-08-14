@@ -170,10 +170,56 @@ Un agente puede estar perfectamente en ejecución y llevar horas sin poder entre
 heartbeat; `info` enseña el estado de conexión, cuántos payloads hay en el buffer, cuándo fue
 el último envío y el último error.
 
+Y cuando la respuesta es "no está reportando" y hace falta saber **por qué**:
+
+```bash
+hygeia-agent doctor
+```
+
+Comprueba, en el orden en que se descartan las causas: el fichero de configuración y sus
+permisos, la URL, el formato de la clave, el proxy y la CA propia, la resolución DNS, la
+conectividad TCP, el certificado TLS y su caducidad, si el servidor acepta la clave, la
+desviación del reloj, y el estado del servicio. Cada fallo lleva debajo qué hacer, y el código de
+salida es distinto de cero si algo va mal, para poder usarlo desde un script de despliegue.
+
+No imprime nunca el secreto de la clave ni la contraseña del proxy: esta salida es lo primero
+que se pega en un ticket de soporte.
+
 Para las interioridades del proceso, sin buscar el fichero de log:
 
 ```bash
 hygeia-agent debug
+```
+
+## Redes corporativas
+
+Si la red obliga a pasar por un proxy, o inspecciona el tráfico TLS con una autoridad de
+certificación propia, hay dos campos en `config.toml`:
+
+```toml
+proxyUrl = "http://usuario:clave@proxy.empresa.local:3128"
+caFile   = "C:/ProgramData/Hygeia/empresa-ca.pem"
+```
+
+Sin `caFile`, en una red con inspección TLS el agente **no puede conectar en absoluto**: el
+certificado que ve está emitido por la autoridad interna, y rechazar certificados inválidos no
+es negociable en un producto de seguridad. El certificado indicado se **suma** al almacén del
+sistema, nunca lo sustituye, para que el agente siga funcionando fuera de la oficina.
+
+`proxyUrl` hace falta aunque estén definidas `HTTP_PROXY` y `HTTPS_PROXY`: un servicio de Windows
+corriendo como `LocalSystem` no hereda las variables de entorno del usuario.
+
+`hygeia-agent doctor` comprueba los dos con la misma configuración que usa el servicio.
+
+## Si Ellysia rota la clave
+
+Rotar una clave desde Ellysia invalida la anterior de inmediato. El agente lo detecta, deja de
+enviar —no llena el buffer con lo que ya no se puede entregar— y el icono de bandeja pasa a rojo
+con el texto "clave rechazada". La nueva se aplica directamente, sin necesidad de reestablecer
+nada antes:
+
+```bash
+echo "$CLAVE_NUEVA" | hygeia-agent enroll
 ```
 
 ## Instalar el icono de bandeja

@@ -10,6 +10,14 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Añadido
 
+- **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
+  permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
+  desviación de reloj y estado del servicio— con un consejo por cada fallo y
+  código de salida distinto de cero si algo va mal. Responde a la pregunta que
+  ni `status` ni `info` contestaban: por qué no llega.
+- **Proxy y autoridad de certificación propia** (`F-09`): campos `proxyUrl` y
+  `caFile`. En una red con inspección TLS el agente no podía conectar en
+  absoluto. La CA se **suma** al almacén del sistema, nunca lo sustituye.
 - **Publicación automática de binarios** (`F-08`, parcial). Una etiqueta `v*`
   compila las cinco plataformas del plan, genera `checksums.txt`, paquetes
   `.deb` y `.rpm` con el servicio ya registrado, el instalador de Windows, y
@@ -36,6 +44,14 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Corregido
 
+- **Una clave revocada dejaba el agente girando en vacío** (`F-03`). Tras rotar
+  la clave en Ellysia, el agente reintentaba cuatro veces por ciclo contra un
+  401 y llenaba el buffer con heartbeats que ya nadie iba a aceptar, mientras
+  el usuario veía "error local: backend devolvió status 401". Ahora hay un
+  estado propio, `key_rejected`, no se reintenta ni se guarda nada, y la clave
+  nueva se puede aplicar **sin reset previo** — antes eran cinco pasos por el
+  icono de bandeja, o editar a mano un fichero con permisos 0600 en cada
+  equipo.
 - **`enroll`, `help` y `version` fallaban si no se podía leer la
   configuración** (`F-02`). El binario cargaba `config.toml` antes de mirar qué
   subcomando se había pedido, así que dar de alta un agente recién instalado

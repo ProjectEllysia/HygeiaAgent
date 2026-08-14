@@ -1206,6 +1206,15 @@ de alta un agente sin intervención humana.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
+> **Estado: resuelto**, con los tres cambios previstos. 401 y 403 pasan a ser un cuarto tipo de
+> error del shipper (`AuthError`): sin reintentos, sin buffer, y estado `key_rejected`.
+>
+> Dos cosas que la entrada no anticipaba y que habrían quedado mal en silencio: `icon.ForState`
+> caía al `default` y habría enseñado el icono **gris** de "sin configurar" —justo lo contrario de
+> lo que pasa—, y el tray escondía el enrollment salvo en "sin configurar", ocultando la única
+> opción que hace falta. Y una tercera: 407 se deja fuera a propósito, porque lo devuelve un
+> proxy pidiendo SUS credenciales y confundirlo mandaría a rotar una clave que está bien.
+
 **Situación actual.** El servidor tiene `POST /hygeia/assets/{id}/rotate-key`
 (`endpoints.py:370`), que genera una clave nueva e **invalida la anterior de inmediato**. Desde
 ese momento, el agente recibe `401` en cada envío.
@@ -1242,6 +1251,19 @@ El agente no gestiona ese caso de ninguna manera especial:
 #### `F-04` — Un subcomando de diagnóstico para soporte
 
 **Impacto en el usuario: Medio · Facilidad: Fácil**
+
+> **Estado: resuelto.** Once comprobaciones en [`doctor.go`](../cmd/hygeia-agent/doctor.go), con
+> código de salida distinto de cero si algo falla.
+>
+> Tres cosas que resultaron más interesantes de lo que sugería esta entrada:
+>
+> - **La autenticación se comprueba con un cuerpo vacío.** Un 422 significa que la clave pasó
+>   —el backend valida la credencial antes que el esquema—, así que se puede verificar sin dar de
+>   alta un heartbeat falso en el activo.
+> - **El reloj sale de la cabecera `Date`** de esa misma respuesta, que existe siempre y no
+>   necesita un envío correcto.
+> - **Doctor no se apoya en el canal de control** para lo esencial: si el servicio no arranca, el
+>   canal tampoco, y ese es uno de los casos a diagnosticar.
 
 **Situación actual.** Cuando un agente no reporta, las herramientas disponibles son
 `hygeia-agent status` (que solo dice si el servicio del sistema operativo está en marcha) y
@@ -1449,6 +1471,14 @@ La facilidad es "Media" y el grueso del trabajo no es el flujo en sí (que es me
 #### `F-09` — Configuración para entornos corporativos: proxy y autoridades de certificación propias
 
 **Impacto en el usuario: Medio · Facilidad: Fácil**
+
+> **Estado: resuelto.** `proxyUrl` y `caFile`, con la CA **aditiva** al almacén del sistema. La
+> prueba principal levanta un servidor TLS con un certificado que no firma ninguna autoridad
+> conocida y comprueba los dos lados: rechazado sin `caFile`, aceptado con él.
+>
+> Dos fallos silenciosos que se cierran de paso: un `proxyUrl` sin esquema lo acepta `url.Parse`
+> sin error y luego el proxy no se usa, sin decir nada; y `AppendCertsFromPEM` no devuelve error,
+> devuelve `false`, así que un fichero DER o un PEM truncado se aceptarían igual de callados.
 
 **Situación actual.** [`shipper/shipper.go:44`](../internal/shipper/shipper.go) crea el cliente HTTP así:
 
@@ -1734,7 +1764,7 @@ y cómo se compila leyendo solo el README.
 
 ### Fase 4 — Operar el agente en campo
 
-> **`F-03`, `F-04`, `F-09`**
+> **`F-03`, `F-04`, `F-09`** — **Estado: completa.**
 > Esfuerzo estimado: 5 a 6 días · Impacto: **Alto**
 
 **Por qué van juntas.** Las tres responden a "el agente está instalado y no reporta, ¿qué hago?".
