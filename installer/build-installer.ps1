@@ -34,12 +34,12 @@ New-Item -ItemType Directory -Path $distDir -Force | Out-Null
 Push-Location $repoRoot
 try {
     Write-Host "==> Compilando hygeia-agent.exe ($Version)"
-    go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/version.Version=$Version" `
+    go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=$Version" `
         -o (Join-Path $distDir "hygeia-agent.exe") ./cmd/hygeia-agent
     if ($LASTEXITCODE -ne 0) { throw "fallo compilando hygeia-agent" }
 
     Write-Host "==> Compilando hygeia-tray.exe ($Version)"
-    go build -ldflags "-H=windowsgui -X github.com/ProjectEllysia/Ellysia-Hygeia/version.Version=$Version" `
+    go build -ldflags "-H=windowsgui -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=$Version" `
         -o (Join-Path $distDir "hygeia-tray.exe") ./cmd/hygeia-tray
     if ($LASTEXITCODE -ne 0) { throw "fallo compilando hygeia-tray" }
 } finally {

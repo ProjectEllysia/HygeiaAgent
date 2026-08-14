@@ -1,0 +1,58 @@
+//go:build !windows
+
+package control
+
+import (
+	"strings"
+	"testing"
+)
+
+// La dirección de un socket Unix viaja en un sun_path de tamaño fijo: 104
+// bytes en macOS y BSD, 108 en Linux. Pasarse no da un error legible, da un
+// "invalid argument" pelado.
+//
+// Esta prueba corre en TODAS las plataformas tipo Unix, no solo donde el
+// límite aprieta, y comprueba contra el menor de los dos. Es el punto: la
+// versión anterior de isolate() ponía el socket bajo t.TempDir(), que en
+// Linux mide unos 76 bytes y en macOS 120, porque allí os.TempDir() es
+// "/var/folders/xx/<32 caracteres>/T/" en vez de "/tmp/". El resultado fue
+// una suite verde en Linux y ocho tests rojos en macOS con un mensaje que no
+// mencionaba ni el socket ni su longitud.
+func TestSocketPathFitsInSunPath(t *testing.T) {
+	isolate(t)
+
+	path := socketPath()
+	if len(path) > maxSocketPath {
+		t.Errorf("la ruta del socket de test ocupa %d bytes, el máximo es %d: %q",
+			len(path), maxSocketPath, path)
+	}
+}
+
+// El mismo límite, para la ruta que se usa en producción.
+func TestDefaultSocketPathFitsInSunPath(t *testing.T) {
+	t.Setenv("HYGEIA_CONTROL_SOCKET", "")
+
+	path := socketPath()
+	if len(path) > maxSocketPath {
+		t.Errorf("la ruta por defecto ocupa %d bytes, el máximo es %d: %q",
+			len(path), maxSocketPath, path)
+	}
+}
+
+// Y si alguien configura una ruta imposible, Listen debe decirlo con
+// claridad en vez de propagar el "invalid argument" del sistema.
+func TestListenRejectsAnOverlongSocketPath(t *testing.T) {
+	long := "/tmp/" + strings.Repeat("x", maxSocketPath) + ".sock"
+	t.Setenv("HYGEIA_CONTROL_SOCKET", long)
+
+	ln, err := Listen()
+	if err == nil {
+		_ = ln.Close()
+		t.Fatal("Listen() con una ruta demasiado larga = nil, se esperaba error")
+	}
+	for _, want := range []string{"bytes", "máximo"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("el error no explica el problema (%q no aparece): %v", want, err)
+		}
+	}
+}

@@ -21,10 +21,10 @@ import (
 	"fyne.io/systray"
 	"github.com/ncruces/zenity"
 
-	"github.com/ProjectEllysia/Ellysia-Hygeia/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/autostart"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/icon"
-	"github.com/ProjectEllysia/Ellysia-Hygeia/version"
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/version"
 )
 
 // pollInterval es cada cuánto el tray pregunta el estado al servicio. Es

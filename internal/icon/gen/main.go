@@ -37,7 +37,7 @@ func main() {
 		log.Fatalf("gen: abriendo %s: %v", srcPath, err)
 	}
 	src, err := png.Decode(f)
-	f.Close()
+	_ = f.Close()
 	if err != nil {
 		log.Fatalf("gen: decodificando %s: %v", srcPath, err)
 	}
@@ -84,7 +84,7 @@ func genWizardBanner(repoRoot string) {
 		log.Fatalf("gen: abriendo %s: %v", srcPath, err)
 	}
 	src, err := png.Decode(f)
-	f.Close()
+	_ = f.Close()
 	if err != nil {
 		log.Fatalf("gen: decodificando %s: %v", srcPath, err)
 	}
@@ -109,7 +109,7 @@ func genWizardBanner(repoRoot string) {
 	if err != nil {
 		log.Fatalf("gen: creando %s: %v", outPath, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if err := png.Encode(out, canvas); err != nil {
 		log.Fatalf("gen: codificando %s: %v", outPath, err)
 	}
@@ -202,9 +202,9 @@ func wrapICO(imgs []*image.RGBA) []byte {
 	}
 
 	var buf bytes.Buffer
-	binary.Write(&buf, binary.LittleEndian, uint16(0))
-	binary.Write(&buf, binary.LittleEndian, uint16(1))
-	binary.Write(&buf, binary.LittleEndian, uint16(len(entries)))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(len(entries)))
 
 	offset := 6 + 16*len(entries)
 	for _, e := range entries {
@@ -214,10 +214,10 @@ func wrapICO(imgs []*image.RGBA) []byte {
 		buf.WriteByte(byte(h % 256))
 		buf.WriteByte(0)
 		buf.WriteByte(0)
-		binary.Write(&buf, binary.LittleEndian, uint16(1))
-		binary.Write(&buf, binary.LittleEndian, uint16(32))
-		binary.Write(&buf, binary.LittleEndian, uint32(len(e.data)))
-		binary.Write(&buf, binary.LittleEndian, uint32(offset))
+		_ = binary.Write(&buf, binary.LittleEndian, uint16(1))
+		_ = binary.Write(&buf, binary.LittleEndian, uint16(32))
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(len(e.data)))
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(offset))
 		offset += len(e.data)
 	}
 	for _, e := range entries {

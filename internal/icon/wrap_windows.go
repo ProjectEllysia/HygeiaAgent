@@ -28,9 +28,9 @@ func wrap(imgs []*image.RGBA) []byte {
 
 	var buf bytes.Buffer
 	// ICONDIR: reserved=0, type=1 (icono), count.
-	binary.Write(&buf, binary.LittleEndian, uint16(0))
-	binary.Write(&buf, binary.LittleEndian, uint16(1))
-	binary.Write(&buf, binary.LittleEndian, uint16(len(entries)))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(0))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(len(entries)))
 
 	// Los datos empiezan tras la cabecera y todas las entradas del directorio.
 	offset := 6 + 16*len(entries)
@@ -41,12 +41,12 @@ func wrap(imgs []*image.RGBA) []byte {
 		// tamaños son <= 48, pero la conversión se deja explícita.
 		buf.WriteByte(byte(w % 256))
 		buf.WriteByte(byte(h % 256))
-		buf.WriteByte(0)                                    // colores en paleta: 0 = sin paleta
-		buf.WriteByte(0)                                    // reservado
-		binary.Write(&buf, binary.LittleEndian, uint16(1))  // planos
-		binary.Write(&buf, binary.LittleEndian, uint16(32)) // bits por píxel
-		binary.Write(&buf, binary.LittleEndian, uint32(len(e.data)))
-		binary.Write(&buf, binary.LittleEndian, uint32(offset))
+		buf.WriteByte(0)                                        // colores en paleta: 0 = sin paleta
+		buf.WriteByte(0)                                        // reservado
+		_ = binary.Write(&buf, binary.LittleEndian, uint16(1))  // planos
+		_ = binary.Write(&buf, binary.LittleEndian, uint16(32)) // bits por píxel
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(len(e.data)))
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(offset))
 		offset += len(e.data)
 	}
 	for _, e := range entries {

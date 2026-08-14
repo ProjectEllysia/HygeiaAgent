@@ -11,7 +11,94 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Versión de Go de TODA la CI, en un solo sitio.
+  #
+  # Deliberadamente NO se usa `go-version-file: go.mod`. La directiva `go` del
+  # go.mod es un MÍNIMO de lenguaje, pero setup-go la interpreta como una
+  # versión exacta, y Go canoniza esa directiva a la forma con parche
+  # (`go 1.25.0`) — `go mod edit -go=1.25` se revierte en el siguiente
+  # `go mod tidy`. El resultado era que la CI instalaba exactamente 1.25.0, de
+  # agosto de 2025, e iba quedándose atrás una release tras otra: doce parches
+  # de correcciones, varias de seguridad, que nunca se probaban.
+  #
+  # Con `1.25.x` se coge el último parche de la serie sin saltar de minor por
+  # sorpresa. Al subir el mínimo en go.mod, hay que subir también este número.
+  #
+  # NOTA: esto no tenía nada que ver con el fallo de enlazado de macOS, pese a
+  # lo que se pensó en su momento. Ese fallo lo causaba un .syso de Windows
+  # enlazándose en todas las plataformas; ver el paso de los .syso más abajo.
+  GO_VERSION: "1.25.x"
+
 jobs:
+  # Comprobaciones que no dependen del sistema operativo: se corren una vez,
+  # no tres veces en la matriz.
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Estos ficheros no están formateados. Ejecuta: gofmt -w ./..."
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # Habría detectado el go.mod con dos dependencias declaradas como
+      # `v0.0.0-latest`, que no es una versión válida: `go build` funcionaba
+      # (nadie las importaba) pero `go mod tidy`, `go list -m all` y cualquier
+      # herramienta de análisis de dependencias fallaban.
+      - name: go.mod está al día
+        run: go mod tidy -diff
+
+      # Un .syso es un objeto nativo, y Go lo enlaza en TODAS las plataformas
+      # salvo que el nombre lleve sufijo de sistema operativo. Un rsrc.syso
+      # (recursos de Windows: icono y metadatos del .exe) sin ese sufijo tuvo
+      # el job de macOS en rojo durante semanas, con un error que ni siquiera
+      # nombraba el fichero culpable:
+      #   ld: unknown file type in '.../000000.o'
+      # Comprobarlo cuesta tres líneas; encontrarlo costó varias jornadas.
+      - name: los .syso llevan sufijo de plataforma
+        run: |
+          stray=$(git ls-files '*.syso' | grep -v '_windows\(_[a-z0-9]*\)\?\.syso$' || true)
+          if [ -n "$stray" ]; then
+            echo "Estos .syso no llevan sufijo de plataforma y se enlazarán también"
+            echo "en Linux y macOS, donde el enlazador no sabe leerlos:"
+            echo "$stray"
+            echo "Renómbralos a <nombre>_windows.syso"
+            exit 1
+          fi
+
+      # La acción v9 es la primera de la serie que soporta golangci-lint v2,
+      # que es lo que declara .golangci.yml (`version: "2"`). Con la v6 la
+      # acción instalaba un golangci-lint v1 compilado con Go 1.24 y fallaba
+      # antes de analizar nada:
+      #   can't load config: the Go language version (go1.24) used to build
+      #   golangci-lint is lower than the targeted Go version (1.25.0)
+      #
+      # La versión va fijada al minor, no a `latest`: así la CI analiza con lo
+      # mismo que se ejecuta en local, y una release nueva del linter no
+      # convierte un commit correcto en un fallo. El parche sí se coge solo.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+
+      # En un producto de seguridad, no comprobar los CVE de las propias
+      # dependencias es difícil de defender.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   build-and-test:
     strategy:
       fail-fast: false
@@ -23,18 +110,18 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: true
 
       - name: go vet
         run: go vet ./...
 
-      # macos-latest trae Xcode 16.3+, cuyo linker por defecto ("ld-prime")
-      # usa chained fixups y rompe el link de binarios cgo (gopsutil,
-      # systray) con "unknown file type in ...o". -no_fixup_chains es el
-      # workaround vigente ya que -ld_classic fue removido en ese Xcode.
+      # Sin CGO_LDFLAGS a mano. El `-Wl,-no_fixup_chains` que hubo aquí era
+      # un rodeo para un problema que nunca fue del enlazador: lo que rompía
+      # macOS era un fichero de recursos de Windows enlazándose en todas las
+      # plataformas (ver el paso de los .syso en static-checks). Nunca arregló
+      # nada y de paso pisaba el `-O2 -g` que setup-go pone por defecto.
       - name: go build (los dos binarios y todos los paquetes)
-        env:
-          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go build ./...
 
       # -race necesita cgo. ubuntu-latest (gcc) y macos-latest (clang, ya
@@ -43,8 +130,6 @@ jobs:
       # se corre sin -race en vez de arriesgar un CI intermitente.
       - name: go test -race
         if: runner.os != 'Windows'
-        env:
-          CGO_LDFLAGS: ${{ runner.os == 'macOS' && '-Wl,-no_fixup_chains' || '' }}
         run: go test -race ./...
 
       - name: go test

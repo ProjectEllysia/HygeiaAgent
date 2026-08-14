@@ -1,0 +1,23 @@
+# Configuración de golangci-lint.
+#
+# Se parte del conjunto por defecto (errcheck, govet, ineffassign, staticcheck,
+# unused) en vez de encender linters a discreción: el valor de un linter está
+# en que corte de verdad, y una lista larga que nadie mira acaba desactivada
+# entera al primer falso positivo.
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # errcheck en los tests, no.
+      #
+      # En código de producción sí importa: un Close() sin comprobar puede
+      # esconder una escritura que no llegó a disco. En un test, las
+      # escrituras van a un httptest.ResponseRecorder o a un buffer en
+      # memoria, donde el error es imposible por construcción, y el `_ =`
+      # delante de cada línea solo añade ruido a lo que el test quiere
+      # demostrar. Además, si una de esas escrituras fallara de verdad, el
+      # test fallaría igualmente por la aserción que viene después.
+      - path: _test\.go
+        linters:
+          - errcheck
