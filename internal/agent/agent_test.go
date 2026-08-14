@@ -456,6 +456,165 @@ func TestCapInventoryLeavesSmallInventoriesIntact(t *testing.T) {
 	}
 }
 
+// Un escaneo que no encuentra nada debe viajar como lista vacía, no como
+// null. El backend declara `software` obligatorio y sin allow_none: con null
+// responde 422 "Field may not be null", el shipper lo clasifica como rechazo
+// permanente y se pierde el heartbeat completo.
+//
+// No es hipotético: los colectores de Linux y macOS devuelven hoy un
+// inventario vacío, así que cada agente de esos sistemas perdía un heartbeat
+// cada seis horas desde que existe el bucle de inventario.
+//
+// Se comprueba sobre el JSON y no sobre el slice porque el slice nil y el
+// vacío son indistinguibles con len(): la diferencia solo aparece al
+// serializar, que es donde estaba el fallo.
+func TestCapInventoryNeverSerializesSoftwareAsNull(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	got := a.capInventory(payload.Inventory{})
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if want := `{"software":[]}`; string(raw) != want {
+		t.Errorf("un inventario vacío se serializa como %s, se esperaba %s", raw, want)
+	}
+}
+
+// ---------------------------------------------------------------------
+// F-05: no reenviar un inventario que no ha cambiado
+// ---------------------------------------------------------------------
+
+// El hash debe depender del CONJUNTO de aplicaciones, no del orden en que las
+// devolvió el registro o el gestor de paquetes. Si dependiera del orden, un
+// escaneo idéntico parecería un inventario nuevo y el ahorro sería nulo.
+func TestInventoryHashIgnoresTheOrderOfTheScan(t *testing.T) {
+	a := payload.Inventory{Software: []payload.Software{
+		{Name: "7-Zip", Version: "24.09"},
+		{Name: "Firefox", Version: "128.0"},
+		{Name: "Python", Version: "3.12.4"},
+	}}
+	b := payload.Inventory{Software: []payload.Software{
+		{Name: "Python", Version: "3.12.4"},
+		{Name: "7-Zip", Version: "24.09"},
+		{Name: "Firefox", Version: "128.0"},
+	}}
+
+	if inventoryHash(a) != inventoryHash(b) {
+		t.Error("el mismo software en distinto orden da hashes distintos")
+	}
+}
+
+// Y debe cambiar ante cualquier cambio real, que es lo que dispara el envío.
+func TestInventoryHashDetectsRealChanges(t *testing.T) {
+	base := payload.Inventory{Software: []payload.Software{
+		{Name: "Firefox", Version: "128.0", Architecture: "x64"},
+	}}
+	baseHash := inventoryHash(base)
+
+	changes := map[string]payload.Inventory{
+		"una actualización de versión": {Software: []payload.Software{
+			{Name: "Firefox", Version: "129.0", Architecture: "x64"},
+		}},
+		"un programa nuevo": {Software: []payload.Software{
+			{Name: "Firefox", Version: "128.0", Architecture: "x64"},
+			{Name: "7-Zip", Version: "24.09", Architecture: "x64"},
+		}},
+		"un programa desinstalado": {},
+		"la misma versión en otra arquitectura": {Software: []payload.Software{
+			{Name: "Firefox", Version: "128.0", Architecture: "x86"},
+		}},
+	}
+	for name, inv := range changes {
+		if inventoryHash(inv) == baseHash {
+			t.Errorf("%s: el hash no cambió", name)
+		}
+	}
+}
+
+func TestShouldSendInventory(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+	now := time.Now()
+	const hash = "abc123"
+
+	// Nada enviado todavía: el primer escaneo siempre viaja.
+	if !a.shouldSendInventory(hash, now) {
+		t.Error("el primer inventario no se envió")
+	}
+
+	a.markInventorySent(&payload.Inventory{}, now)
+	sent := a.sentInventoryHash
+
+	if a.shouldSendInventory(sent, now) {
+		t.Error("se reenvía un inventario idéntico al ya aceptado")
+	}
+	if !a.shouldSendInventory("otro-hash-distinto", now) {
+		t.Error("no se envía un inventario que sí ha cambiado")
+	}
+	// Reenvío forzado: si el backend perdiera el inventario, sin esto no se
+	// volvería a enviar nunca.
+	if !a.shouldSendInventory(sent, now.Add(inventoryResendInterval)) {
+		t.Errorf("no se fuerza el reenvío pasadas %v", inventoryResendInterval)
+	}
+	if a.shouldSendInventory(sent, now.Add(inventoryResendInterval-time.Minute)) {
+		t.Error("se fuerza el reenvío antes de tiempo")
+	}
+}
+
+// El hash se apunta al ACEPTARSE el envío, no al adjuntarlo. Si se apuntara
+// antes, un payload rechazado se llevaría el inventario por delante y el
+// activo se quedaría con el inventario viejo hasta el reenvío forzado del día
+// siguiente — que es justo el fallo A-04 con otra cara.
+func TestPermanentRejectDoesNotMarkTheInventoryAsSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.mu.Lock()
+	a.lastInventory = &payload.Inventory{Software: []payload.Software{{Name: "Firefox", Version: "128.0"}}}
+	a.mu.Unlock()
+
+	a.runOnce(context.Background())
+
+	a.mu.Lock()
+	hash, restored := a.sentInventoryHash, a.lastInventory
+	a.mu.Unlock()
+
+	if hash != "" {
+		t.Error("se dio por enviado un inventario que el backend rechazó")
+	}
+	// Y sigue en la cola para el próximo heartbeat (A-04).
+	if restored == nil {
+		t.Error("el inventario no volvió a la cola tras el rechazo")
+	}
+}
+
+// El camino feliz del mismo mecanismo: aceptado el envío, el inventario queda
+// apuntado y el siguiente escaneo idéntico ya no viaja.
+func TestAcceptedHeartbeatMarksTheInventoryAsSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"nextIntervalSec":15}`))
+	}))
+	defer srv.Close()
+
+	inv := payload.Inventory{Software: []payload.Software{{Name: "Firefox", Version: "128.0"}}}
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.mu.Lock()
+	a.lastInventory = &inv
+	a.mu.Unlock()
+
+	a.runOnce(context.Background())
+
+	if a.shouldSendInventory(inventoryHash(inv), time.Now()) {
+		t.Error("un inventario ya aceptado por el backend se volvería a enviar")
+	}
+}
+
 // El inventario se adjunta a UN payload y se limpia. Si ese payload concreto
 // muere por un rechazo permanente —que casi nunca tiene que ver con el
 // inventario: reloj desincronizado, un porcentaje fuera de rango…— el

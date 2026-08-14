@@ -5,6 +5,9 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,6 +53,18 @@ type Agent struct {
 	// payload que va al buffer se lleva su inventario consigo y lo entrega al
 	// drenar, así que ahí no hay nada que reponer.
 	lastInventory *payload.Inventory
+	// sentInventoryHash y sentInventoryAt identifican el último inventario que
+	// el backend llegó a ACEPTAR (F-05). Mientras un escaneo nuevo dé el mismo
+	// hash, no se adjunta: el campo ausente significa "no he escaneado en este
+	// heartbeat" y el backend conserva el que ya tiene.
+	//
+	// No se persisten a disco a propósito. Tras un reinicio del servicio, el
+	// hash vuelve a estar vacío y el primer escaneo se envía otra vez: repetir
+	// un inventario es inofensivo —el backend lo reemplaza por uno idéntico—,
+	// mientras que arrastrar un hash de una sesión anterior podría dar por
+	// enviado algo que nunca llegó.
+	sentInventoryHash string
+	sentInventoryAt   time.Time
 }
 
 // New construye el agente a partir de la config ya cargada. Si la config no
@@ -282,10 +297,93 @@ func (a *Agent) scanInventory(ctx context.Context) {
 			return
 		}
 		inv := a.capInventory(r.inv)
+
+		// F-05: si el inventario no ha cambiado desde el último que el
+		// backend confirmó, no se adjunta. El campo ausente significa "no he
+		// escaneado en este heartbeat" y el backend conserva el anterior, así
+		// que omitirlo es exactamente equivalente a repetirlo.
+		hash := inventoryHash(inv)
+		if !a.shouldSendInventory(hash, time.Now()) {
+			a.log.Debug("inventario sin cambios, no se adjunta",
+				"aplicaciones", len(inv.Software), "hash", hash[:12])
+			return
+		}
+
 		a.mu.Lock()
 		a.lastInventory = &inv
 		a.mu.Unlock()
 	}
+}
+
+// inventoryResendInterval fuerza un envío periódico aunque nada haya cambiado.
+//
+// Sin él, un inventario que el backend acepta pero pierde después —una
+// restauración de copia de seguridad, una migración a medias— no se volvería a
+// enviar nunca, porque para el agente sigue estando "ya enviado". Un envío al
+// día reconcilia solo, y sigue siendo cuatro veces menos tráfico que los
+// cuatro escaneos diarios de hoy.
+const inventoryResendInterval = 24 * time.Hour
+
+// inventoryHash identifica el contenido de un inventario.
+//
+// Se ordenan las entradas ya serializadas antes de resumirlas, en vez de
+// confiar en el orden del slice: así el hash depende solo del CONJUNTO de
+// aplicaciones y no de en qué orden las devolvió el registro o el gestor de
+// paquetes. Un cambio de orden sin cambio de contenido no debe parecer un
+// inventario nuevo.
+//
+// Se resume la entrada entera, no una selección de campos: todos son estables
+// entre escaneos —salen del registro o de la base de datos del gestor— y
+// elegir un subconjunto solo abriría la puerta a no detectar un cambio real.
+func inventoryHash(inv payload.Inventory) string {
+	lines := make([]string, 0, len(inv.Software))
+	for _, sw := range inv.Software {
+		raw, err := json.Marshal(sw)
+		if err != nil {
+			// payload.Software son cadenas y enteros: no hay forma de que
+			// falle. Si algún día la hubiera, mejor un hash distinto (que
+			// provoca un envío de más) que uno igual (que se lo salta).
+			return fmt.Sprintf("no-serializable-%d", time.Now().UnixNano())
+		}
+		lines = append(lines, string(raw))
+	}
+	sort.Strings(lines)
+
+	h := sha256.New()
+	for _, line := range lines {
+		_, _ = h.Write([]byte(line))
+		_, _ = h.Write([]byte{'\n'})
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// shouldSendInventory decide si un escaneo recién hecho hay que adjuntarlo.
+func (a *Agent) shouldSendInventory(hash string, now time.Time) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if hash != a.sentInventoryHash {
+		return true
+	}
+	return now.Sub(a.sentInventoryAt) >= inventoryResendInterval
+}
+
+// markInventorySent recuerda qué inventario dio por bueno el backend.
+//
+// Se llama al ACEPTARSE el envío, no al adjuntarlo: si el payload se pierde o
+// lo rechazan, el inventario que llevaba nunca llegó y hay que reintentarlo.
+// Darlo por enviado antes de tiempo dejaría al activo con el inventario
+// desactualizado hasta el reenvío forzado del día siguiente.
+func (a *Agent) markInventorySent(inv *payload.Inventory, now time.Time) {
+	if inv == nil {
+		return
+	}
+	hash := inventoryHash(*inv)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sentInventoryHash = hash
+	a.sentInventoryAt = now
 }
 
 // capInventory ordena el listado por nombre y lo recorta a
@@ -304,9 +402,33 @@ func (a *Agent) scanInventory(ctx context.Context) {
 // subconjunto visible sea el mismo entre escaneos: sin ordenar, el listado
 // que sobrevive depende del orden de enumeración del registro y parpadearía
 // de un escaneo a otro.
+// Un escaneo sin resultados devuelve un slice nil, y un slice nil se
+// serializa como `"software": null`, no como `"software": []`. El backend
+// declara ese campo obligatorio y sin allow_none, así que responde 422
+// "Field may not be null" y el shipper descarta el heartbeat entero, igual
+// que con un inventario demasiado grande. Se normaliza aquí, que es el
+// único punto por el que pasan los escaneos de los tres sistemas.
 func (a *Agent) capInventory(inv payload.Inventory) payload.Inventory {
+	if inv.Software == nil {
+		inv.Software = []payload.Software{}
+	}
+
+	// Se ordena por nombre, versión y arquitectura, no solo por nombre.
+	// sort.Slice no es estable, y el nombre por sí solo no desempata: un
+	// equipo puede tener el mismo paquete en dos arquitecturas, o dos
+	// versiones del mismo programa. Con un solo criterio, esas entradas
+	// podían quedar en distinto orden en cada escaneo, y entonces ni el
+	// recorte era el mismo entre escaneos —que es lo que promete el párrafo
+	// de arriba— ni el hash de F-05 servía para detectar cambios.
 	sort.Slice(inv.Software, func(i, j int) bool {
-		return inv.Software[i].Name < inv.Software[j].Name
+		x, y := inv.Software[i], inv.Software[j]
+		if x.Name != y.Name {
+			return x.Name < y.Name
+		}
+		if x.Version != y.Version {
+			return x.Version < y.Version
+		}
+		return x.Architecture < y.Architecture
 	})
 
 	a.mu.Lock()
@@ -390,6 +512,9 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 	a.log.Debug("heartbeat enviado", "nextIntervalSec", resp.NextIntervalSec)
 	a.setState(control.StateConnected, nil)
 	a.markPush()
+	// Aquí, y no al adjuntarlo: hasta que el backend no acepta el payload, el
+	// inventario que llevaba no ha llegado a ninguna parte (F-05).
+	a.markInventorySent(p.Inventory, time.Now())
 	a.drainBuffer(ctx, shp)
 	return time.Duration(resp.NextIntervalSec) * time.Second
 }

@@ -686,6 +686,13 @@ servidor ya está preparado para tratar los campos ausentes como "el agente no r
 
 **Impacto en el usuario: Medio · Facilidad: Media**
 
+> **Estado: resuelto.** Se enumera `HKEY_USERS` con deduplicación entre ramas. Comprobado en una
+> máquina real: la clave `Uninstall` de `LocalSystem` **no existe siquiera**, así que el código
+> anterior no leía poco desde el servicio, leía cero; y la rama del usuario aportó 13 programas
+> que se perdían. Queda una limitación documentada en el código: `HKEY_USERS` solo contiene los
+> perfiles cargados, así que el software de un usuario que no ha iniciado sesión desde el último
+> arranque sigue sin verse.
+
 **Qué ocurre hoy.** [`collector/inventory_windows.go:29-33`](../internal/collector/inventory_windows.go)
 incluye entre las rutas a escanear:
 
@@ -999,6 +1006,12 @@ lista con mejor relación entre valor entregado y esfuerzo.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
+> **Estado: Linux resuelto, macOS pendiente.** dpkg en
+> [`inventory_dpkg.go`](../internal/collector/inventory_dpkg.go); RPM, Flatpak y
+> Snap en [`inventory_pkgcmd.go`](../internal/collector/inventory_pkgcmd.go).
+> Ver las notas al final de esta entrada, en especial la cuestión abierta sobre
+> el formato de las versiones.
+
 **Situación actual.** [`collector/inventory_linux.go`](../internal/collector/inventory_linux.go) y
 [`collector/inventory_darwin.go`](../internal/collector/inventory_darwin.go) son funciones vacías de
 siete líneas que devuelven un inventario vacío sin error. Solo Windows tiene implementación
@@ -1034,6 +1047,109 @@ sistemas operativos soportados.
 - En ambos casos, rellenar los campos que el esquema del servidor ya acepta: `source` (con
   valores como `dpkg`, `rpm`, `brew`, `plist`) y `architecture`, para que el informe pueda
   distinguir el origen de cada entrada.
+
+**Lo aprendido al implementar dpkg.** Tres cosas que no estaban en el análisis original y que
+condicionan lo que queda por hacer:
+
+1. **De los once campos del contrato, el análisis de vulnerabilidades usa dos.** El adaptador a
+   Lybra (`services/inventory_adapter.py`) toma `name` y `version`, y descarta explícitamente
+   todo paquete sin versión: sin ella el motor no puede resolver un CPE, así que no produce ni
+   una sola CVE. `guid`, `installPath`, `sizeBytes` e `installedAt` solo alimentan el informe en
+   PDF. Al implementar RPM, Flatpak, Snap o macOS, **la versión es el campo que decide si el
+   trabajo sirve de algo**; el resto es acabado.
+2. **El fichero de estado de dpkg no lista lo instalado, lista lo conocido.** Incluye paquetes
+   desinstalados sin purgar (`deinstall ok config-files`) y descomprimidos a medio configurar
+   (`install ok unpacked`). Hay que filtrar por el tercer campo de `Status`, que además acierta
+   con `hold ok installed` —un paquete retenido sigue instalado— donde comparar la cadena entera
+   contra `install ok installed` fallaría. Los otros gestores tendrán su equivalente y conviene
+   buscarlo antes de dar por buena su salida.
+3. **`null` no es lista vacía.** El colector de Linux devolvía un slice nulo, que se serializa
+   como `"software": null`, y el backend declara el campo obligatorio y no nulo: respondía 422 y
+   el agente descartaba el heartbeat entero. Cada agente de Linux y macOS perdía un heartbeat
+   cada seis horas desde que existe el bucle de inventario. Está corregido en `capInventory`,
+   que es el punto por el que pasan los escaneos de los tres sistemas.
+
+**Cómo se verificó dpkg.** Las pruebas contra un fichero de ejemplo solo demuestran que el
+analizador coincide con la idea que uno tiene del formato. La comprobación que vale es contra un
+sistema real: sobre un Ubuntu con 620 paquetes registrados, la salida del colector es idéntica
+byte a byte a la de `dpkg-query -W` —619 entradas, con nombre, versión y arquitectura—, y el
+único paquete descartado estaba en `deinstall ok config-files`.
+
+**Cómo se verificó RPM.** La misma idea, en un contenedor de Fedora, y buscando a propósito una
+referencia que no pasara por la misma cadena de consulta que usa el colector —comparar
+`rpm -qa --qf` contra sí mismo no demuestra nada—:
+
+- El recuento coincide con `rpm -qa` en su formato por defecto: 147 y 147.
+- Reconstruyendo `nombre-versión-release.arquitectura` a partir de los campos ya analizados y
+  buscándolo en esa salida por defecto, **casan los 147, sin ninguna discrepancia**. Eso cruza
+  nombre, versión y arquitectura contra una representación que produce el propio `rpm`.
+- Fabricante, tamaño y fecha se contrastaron contra `rpm -qi`, que es otra representación
+  distinta: coinciden al byte y al día. Se confirma de paso que `%{SIZE}` viene en bytes, al
+  revés que el `Installed-Size` de dpkg, que viene en KiB.
+- `bash` sale como `5.3.9` y no como `5.3.9-3.fc44`, que es la decisión de `F-14` aplicada.
+- Las claves del llavero (`gpg-pubkey`), que no tienen ni arquitectura ni fabricante, confirman
+  sobre datos reales que el `(none)` de rpm se traduce a vacío y no se cuela como texto.
+- El camino completo en un sistema RPM es el espejo del de Ubuntu: dpkg ausente sin error, rpm
+  con sus 147 entradas, flatpak y snap ausentes sin error.
+
+No hizo falta corregir nada del colector. Queda por hacer la misma comparación con
+`brew list --versions` cuando se implemente macOS.
+
+---
+
+#### `F-14` — Cómo se compara la versión de un paquete de Linux con los rangos del NVD
+
+**Impacto en el usuario: Medio · Facilidad: Fácil (la decisión es lo caro, no el código)**
+
+> **Estado: resuelto, por la opción 1.** La normalización vive en
+> `services/inventory_adapter.py` del servidor, no en el agente: el inventario guardado conserva
+> la versión exacta del paquete y solo el motor ve la recortada. Se aplica únicamente a `dpkg`.
+> La prueba principal no compara cadenas, usa `version_compare` y comprueba los dos lados —que
+> sin recortar la versión cae por debajo del inicio del rango, y que recortada casa—, así que
+> documenta el fallo además de fijar el arreglo.
+
+Esto salió al implementar `F-01`. La decisión no era solo técnica, de ahí que se dejara anotada
+antes de tocar nada.
+
+**El problema.** Lybra compara versiones con `_version_key` (`themis/lybra/kb.py:57`), que parte
+la cadena en tramos de dígitos y de letras y descarta los separadores. Las letras ordenan por
+debajo de los números. Con la versión que dpkg reporta de verdad, eso da:
+
+```
+"2.39-0ubuntu8.3"  →  [2, 39, 0, "ubuntu", 8, 3]
+"2.39"             →  [2, 39]
+```
+
+Al comparar con un rango del tipo "vulnerable desde 2.39", la versión instalada sale **más
+antigua** que 2.39 por culpa del sufijo de empaquetado, y la coincidencia se pierde. Es un falso
+negativo: una vulnerabilidad real que no se reporta.
+
+Enviar la versión de origen (`9.6p1` en vez de `1:9.6p1-3ubuntu13.5`) arregla ese caso. El
+formato de Debian lo permite sin ambigüedad: `[epoca:]version_origen[-revision]`, separando por
+el último guion. RPM ya se envía así, porque `%{VERSION}` es la versión de origen y `%{RELEASE}`
+el empaquetado.
+
+**Por qué no se ha hecho sin más.** Recortar pierde información que sí importa: las
+distribuciones estables **corrigen vulnerabilidades sin subir la versión de origen**. En Debian y
+Ubuntu eso es la norma, no la excepción: `9.6p1-3ubuntu13.5` puede llevar ya el parche de una CVE
+que afecta a `9.6p1`.
+
+Ahora bien, ese falso positivo **existe igual con la versión completa**, porque el NVD no sabe
+expresar "corregido en la revisión 13.5 de Ubuntu". Recortar no lo empeora; solo deja de perder
+las coincidencias del primer caso. Resolver el falso positivo de verdad exige otra fuente de
+datos —los avisos de seguridad de la propia distribución (DSA, USN, OVAL)—, que es un trabajo
+distinto y bastante mayor.
+
+**Qué se hizo, y las alternativas que se descartaron.**
+
+1. **Normalizar en el servidor, no en el agente.** ← la elegida. En `services/inventory_adapter.py`, que ya es
+   donde se decide qué versión ve el motor —ahí vive la regla de JetBrains—, y que ya recibe el
+   campo `source` para saber si aplica la gramática de Debian o la de RPM. Así el inventario
+   guardado conserva la versión exacta del paquete para el informe en PDF y para saber si un
+   parche de la distribución está aplicado, y el motor recibe la versión de origen. Es la
+   separación correcta: fidelidad en el dato, normalización en el consumidor.
+2. Normalizar en el agente. Menos código, pero pierde la versión exacta para todo lo demás.
+3. Dejarlo como está y asumir los falsos negativos.
 
 ---
 
@@ -1149,6 +1265,13 @@ manifiesta como un `400` genérico y opaco.
 #### `F-05` — Enviar solo los inventarios que han cambiado
 
 **Impacto en el usuario: Medio · Facilidad: Fácil**
+
+> **Estado: resuelto.** Sin ningún cambio en el servidor, como estaba previsto. Dos cosas que no
+> estaban en esta entrada y resultaron necesarias: el hash hay que apuntarlo **al aceptarse el
+> envío**, no al adjuntarlo (si no, un payload rechazado se lleva el inventario por delante,
+> que es `A-04` otra vez), y `capInventory` ordenaba con un criterio que no desempataba, así que
+> en las máquinas por encima del tope el hash habría cambiado en cada escaneo y el mecanismo no
+> habría servido de nada justo donde más falta hace.
 
 **Situación actual.** Cada seis horas, el agente escanea el software instalado y envía la lista
 completa, aunque no haya cambiado nada. En una máquina con dos mil aplicaciones son varios
@@ -1459,6 +1582,7 @@ Ordenado por prioridad, entendida como impacto alto combinado con facilidad alta
 | `F-01` | Inventario en Linux y macOS | Alto | Media | 5 |
 | `A-12` | Inventario de Windows: rama de usuario correcta | Medio | Media | 5 |
 | `F-05` | Envío diferencial del inventario | Medio | Fácil | 5 |
+| `F-14` | Formato de la versión de los paquetes de Linux frente al NVD | Medio | Fácil | 5 |
 | `F-08` | Publicación automática de binarios firmados | Alto | Media | 6 |
 | `F-06` | Señales de seguridad | Alto | Media a Difícil | 7 |
 | `F-12` | Direcciones de red en el payload | Medio | Fácil | 7 |
@@ -1599,6 +1723,10 @@ falla en una red con inspección TLS.
 
 > **`F-01`, `A-12`, `F-05`**
 > Esfuerzo estimado: 6 a 8 días · Impacto: **Alto**
+>
+> **Estado: hecha, salvo el inventario de macOS.** Lo único que queda es `F-01` en macOS:
+> `inventory_darwin.go` sigue devolviendo una lista vacía. `F-14`, que apareció al implementar
+> esta fase, se resolvió en el servidor.
 
 **Por qué van juntas.** Las tres son el mismo subsistema. `F-01` (Linux y macOS) y `A-12`
 (la rama de usuario en Windows) son el mismo trabajo de "hacer que el inventario diga la verdad"

@@ -9,7 +9,7 @@
 
 Dos binarios:
 
-| | |
+| Software | Proposito |
 |---|---|
 | `hygeia-agent` | El servicio: recolecta y envía. Es el único imprescindible. |
 | `hygeia-tray` | Companion de bandeja, opcional: muestra el estado y permite dar de alta el activo sin editar ficheros a mano. Solo para estaciones de trabajo. |

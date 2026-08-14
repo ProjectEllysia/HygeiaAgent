@@ -8,7 +8,40 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ## [Sin publicar]
 
+### Añadido
+
+- **Inventario de software en Linux** (`F-01`). El agente lee
+  `/var/lib/dpkg/status` en Debian, Ubuntu y derivadas, y consulta RPM,
+  Flatpak y Snap donde estén. Hasta ahora el colector de Linux devolvía una
+  lista vacía, así que un servidor con el agente instalado aparecía en
+  Ellysia como una máquina sin ningún software y su informe de inventario
+  salía en blanco. Queda pendiente macOS.
+- **El inventario ya no se reenvía si no ha cambiado** (`F-05`). Antes viajaba
+  la lista completa cada seis horas aunque no hubiera cambiado nada: en un
+  equipo con dos mil aplicaciones, varios cientos de kilobytes cuatro veces al
+  día. Se envía cuando cambia, y una vez al día en cualquier caso para
+  reconciliar. No requiere cambios en el servidor.
+
 ### Corregido
+
+- **Un inventario vacío tiraba el heartbeat entero** (`F-01`). Un escaneo sin
+  resultados viajaba como `"software": null`, y el backend declara ese campo
+  obligatorio y no nulo: respondía 422 y el agente descartaba el heartbeat
+  completo. Afectaba a todos los agentes de Linux y macOS, que perdían un
+  heartbeat cada seis horas desde que existe el bucle de escaneo.
+- **Las versiones de los paquetes de Linux no casaban con los rangos del NVD**
+  (`F-14`, corregido en el servidor). El sufijo de empaquetado de Debian hacía
+  que `2.39-0ubuntu8.3` ordenase por debajo de `2.39`, así que un rango
+  "vulnerable desde 2.39" no casaba y la vulnerabilidad no se reportaba. El
+  adaptador a Lybra usa ahora la versión de origen; el inventario guardado
+  conserva la versión exacta del paquete.
+- **El inventario de Windows no veía el software instalado por el usuario**
+  (`A-12`). Se leía `HKEY_CURRENT_USER`, que para un servicio corriendo como
+  `LocalSystem` es la rama de `LocalSystem` —cuya clave `Uninstall` ni
+  siquiera existe—, no la del usuario del escritorio. Ahora se enumera
+  `HKEY_USERS`. En la máquina de prueba aparecen 13 programas que antes se
+  perdían, entre ellos Discord, Spotify, GitHub Desktop y DBeaver. La
+  arquitectura, además, ya no se reporta siempre como `x64`.
 
 - **El heartbeat se descartaba entero cuando un proceso usaba más de un núcleo**
   (`A-01`). El porcentaje de CPU por proceso no se acotaba, y el backend rechaza

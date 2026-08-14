@@ -206,7 +206,7 @@ Todos los campos salvo `name` son opcionales.
 | `architecture` | cadena, ≤16 | |
 | `sizeBytes` | entero ≥0 | |
 | `status` | cadena, ≤32 | |
-| `source` | cadena, ≤32 | `registry`, `dpkg`, `rpm`, `brew`… |
+| `source` | cadena, ≤32 | `registry` (Windows), `dpkg`, `rpm`, `flatpak`, `snap`. |
 
 ---
 
@@ -219,8 +219,17 @@ recolectar métricas y el dato cambia con poca frecuencia.
   el resultado **al primer heartbeat siguiente**, una sola vez.
 - **Campo ausente** significa "no he escaneado en este heartbeat": el backend
   conserva el inventario anterior.
-- **Lista vacía** sí es un reemplazo válido: un equipo sin software, o el
-  colector de Linux/macOS, que hoy son funciones vacías (ver F-01).
+- Desde `F-05`, el agente **omite el inventario si no ha cambiado** respecto al
+  último que el backend aceptó, apoyándose justo en esa regla. Lo reenvía de
+  todas formas una vez al día, para que un inventario perdido en el servidor
+  acabe reconciliándose sin intervención.
+- **Lista vacía** sí es un reemplazo válido: un equipo sin software, o un
+  colector que no encuentra ninguna fuente conocida (por ejemplo, una
+  distribución que no use dpkg mientras el resto de gestores está pendiente,
+  o macOS, que sigue sin implementar — ver F-01).
+- **`null` no es válido.** El campo es una lista obligatoria y el backend
+  rechaza el heartbeat completo con un 422 si llega nula. Un colector que no
+  encuentre nada debe enviar `[]`.
 - Nunca es un delta: cada envío es el estado completo y **reemplaza** al
   anterior.
 - El agente acota la lista a `inventoryMaxItems` (1500 por defecto) antes de
