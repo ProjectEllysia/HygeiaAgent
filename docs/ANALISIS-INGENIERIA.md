@@ -1157,6 +1157,21 @@ distinto y bastante mayor.
 
 **Impacto en el usuario: Alto · Facilidad: Muy fácil**
 
+> **Estado: resuelto.** Los tres subcomandos previstos (`enroll`, `reset`, `info`), en
+> [`commands.go`](../cmd/hygeia-agent/commands.go). Tres cosas que esta entrada no anticipaba:
+>
+> - **La clave se lee de la entrada estándar** si no viene como argumento. Un argumento queda
+>   visible en `ps` para cualquier usuario de la máquina y se queda en el historial del
+>   intérprete, así que `echo "$CLAVE" | hygeia-agent enroll` es la forma recomendada y la que
+>   documenta la ayuda.
+> - **`reset` exige `--yes` cuando no hay terminal** donde confirmar, en vez de dar el silencio
+>   por confirmación. Se parece demasiado a `restart` como para dejar abierto el camino
+>   silencioso.
+> - **Había que arreglar antes un fallo anterior**: `main.go` cargaba `config.toml` antes de
+>   mirar qué subcomando se pedía, así que `enroll` moría con "error cargando configuración"
+>   exactamente en la situación para la que existe. Ahora la configuración se carga
+>   perezosamente, solo cuando el subcomando la necesita.
+
 **Situación actual.** Hay exactamente dos formas de darle su clave a un agente recién
 instalado: usar el icono de bandeja (`hygeia-tray`), o editar a mano el fichero `config.toml`
 en `C:\ProgramData\Hygeia\` o `/etc/hygeia/`, con privilegios de administrador, y reiniciar el

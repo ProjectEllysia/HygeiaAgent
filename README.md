@@ -96,7 +96,44 @@ con un working directory que no controlamos (en Windows, System32).
 Ahí van `config.toml`, `buffer.jsonl` y `hygeia-agent.log`. En modo servicio los logs van al
 fichero, rotado a 5 MB y conservando un fichero anterior; en primer plano, a stderr.
 
-Para diagnosticar un servicio ya en marcha, sin buscar el fichero de log:
+## Dar de alta el agente
+
+Un agente recién instalado no tiene clave y no reporta nada hasta que se le da una. Se puede
+hacer desde el icono de bandeja, o desde la línea de órdenes — que es lo único disponible en un
+servidor sin escritorio:
+
+```bash
+echo "$CLAVE_DE_AGENTE" | hygeia-agent enroll
+```
+
+Se admite también `hygeia-agent enroll <clave>`, pero **la clave pasada como argumento queda
+visible** para cualquier usuario de la máquina con `ps`, y se queda en el historial del
+intérprete. Por eso la forma recomendada, y la que conviene usar en un `cloud-init` o un
+playbook de Ansible, es la entrada estándar.
+
+Para retirarle la clave (deja de reportar hasta que se le dé de alta otra vez):
+
+```bash
+hygeia-agent reset
+```
+
+Pregunta antes de borrar. Sin terminal donde confirmar, exige `--yes` explícitamente en vez de
+darlo por hecho.
+
+## Diagnosticar
+
+Dos preguntas distintas, dos órdenes distintas:
+
+```bash
+hygeia-agent status   # ¿está vivo el proceso? (se lo pregunta al gestor de servicios)
+hygeia-agent info     # ¿está reportando? (se lo pregunta al propio agente)
+```
+
+Un agente puede estar perfectamente en ejecución y llevar horas sin poder entregar un
+heartbeat; `info` enseña el estado de conexión, cuántos payloads hay en el buffer, cuándo fue
+el último envío y el último error.
+
+Para las interioridades del proceso, sin buscar el fichero de log:
 
 ```bash
 hygeia-agent debug

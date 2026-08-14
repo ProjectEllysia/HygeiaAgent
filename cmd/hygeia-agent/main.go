@@ -10,6 +10,9 @@
 //	hygeia-agent uninstall    lo elimina
 //	hygeia-agent start|stop|restart
 //	hygeia-agent status       estado del servicio según el SO
+//	hygeia-agent enroll       da de alta el agente sin necesidad del tray
+//	hygeia-agent reset        borra la clave local
+//	hygeia-agent info         estado del propio agente: conexión, buffer, envíos
 //	hygeia-agent debug        diagnóstico del proceso en marcha
 package main
 
@@ -84,14 +87,55 @@ func main() {
 	var level slog.LevelVar
 	log, logRing := newLogger(&level)
 
-	cfg, err := config.Load(config.DefaultPath())
+	// La configuración se carga PEREZOSAMENTE, solo cuando el subcomando la
+	// necesita de verdad.
+	//
+	// Antes se cargaba aquí, antes de mirar siquiera qué se había pedido, y
+	// eso rompía justo el caso para el que existe `enroll`: en un agente
+	// recién instalado puede no haber config.toml todavía —`enroll` es lo que
+	// lo crea—, y leerlo exige privilegios que quien da de alta no tiene por
+	// qué tener. `hygeia-agent enroll` moría con "error cargando
+	// configuración" en la única situación en la que hace falta. Y `help` y
+	// `version` morían igual, sin necesitar nada.
+	//
+	// enroll, reset, info, debug, version y help no tocan la configuración:
+	// hablan con el servicio en marcha, que tiene la suya.
+	buildService := func() (service.Service, error) {
+		cfg, err := config.Load(config.DefaultPath())
+		if err != nil {
+			return nil, fmt.Errorf("cargando configuración: %w", err)
+		}
+		level.Set(cfg.SlogLevel())
+
+		prg := &program{log: log, agent: agent.New(log, cfg), recentLog: logRing.Lines}
+		return service.New(prg, svcConfig())
+	}
+
+	if len(os.Args) > 1 {
+		if err := runCommand(buildService, os.Args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "hygeia-agent: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	svc, err := buildService()
 	if err != nil {
-		log.Error("error cargando configuración", "err", err)
+		log.Error("no se pudo construir el servicio", "err", err)
 		os.Exit(1)
 	}
-	level.Set(cfg.SlogLevel())
 
-	svcConfig := &service.Config{
+	// Sin argumentos: service.Run detecta solo si lo ha arrancado el SO (y
+	// entonces habla con el gestor de servicios) o si es una ejecución
+	// interactiva en terminal, donde bloquea hasta Ctrl+C.
+	if err := svc.Run(); err != nil {
+		log.Error("el servicio terminó con error", "err", err)
+		os.Exit(1)
+	}
+}
+
+func svcConfig() *service.Config {
+	return &service.Config{
 		Name:        "hygeia-agent",
 		DisplayName: "Ellysia Hygeia Agent",
 		Description: "Recolecta métricas de salud del activo y las envía al backend de Ellysia.",
@@ -103,29 +147,6 @@ func main() {
 			"RestartSec":      10,
 			"StartLimitBurst": 0,
 		},
-	}
-
-	prg := &program{log: log, agent: agent.New(log, cfg), recentLog: logRing.Lines}
-	svc, err := service.New(prg, svcConfig)
-	if err != nil {
-		log.Error("no se pudo construir el servicio", "err", err)
-		os.Exit(1)
-	}
-
-	if len(os.Args) > 1 {
-		if err := runCommand(svc, os.Args[1]); err != nil {
-			fmt.Fprintf(os.Stderr, "hygeia-agent: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
-	// Sin argumentos: service.Run detecta solo si lo ha arrancado el SO (y
-	// entonces habla con el gestor de servicios) o si es una ejecución
-	// interactiva en terminal, donde bloquea hasta Ctrl+C.
-	if err := svc.Run(); err != nil {
-		log.Error("el servicio terminó con error", "err", err)
-		os.Exit(1)
 	}
 }
 

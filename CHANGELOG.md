@@ -10,6 +10,13 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Añadido
 
+- **Alta y diagnóstico por línea de órdenes** (`F-02`): `hygeia-agent enroll`,
+  `reset` e `info`. Hasta ahora, dar de alta un servidor sin escritorio
+  obligaba a editar `config.toml` a mano con privilegios y reiniciar el
+  servicio. La clave se lee de la entrada estándar
+  (`echo "$CLAVE" | hygeia-agent enroll`) porque un argumento queda visible en
+  `ps`. `info` responde a una pregunta distinta que `status`: si el agente
+  está *reportando*, no si el proceso está *vivo*.
 - **Inventario de software en Linux** (`F-01`). El agente lee
   `/var/lib/dpkg/status` en Debian, Ubuntu y derivadas, y consulta RPM,
   Flatpak y Snap donde estén. Hasta ahora el colector de Linux devolvía una
@@ -24,6 +31,11 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Corregido
 
+- **`enroll`, `help` y `version` fallaban si no se podía leer la
+  configuración** (`F-02`). El binario cargaba `config.toml` antes de mirar qué
+  subcomando se había pedido, así que dar de alta un agente recién instalado
+  —que puede no tener configuración todavía, o cuyo fichero exige privilegios—
+  era imposible. Se carga ahora solo cuando el subcomando la necesita.
 - **Un inventario vacío tiraba el heartbeat entero** (`F-01`). Un escaneo sin
   resultados viajaba como `"software": null`, y el backend declara ese campo
   obligatorio y no nulo: respondía 422 y el agente descartaba el heartbeat
