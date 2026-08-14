@@ -304,7 +304,17 @@ func (a *Agent) scanInventory(ctx context.Context) {
 // subconjunto visible sea el mismo entre escaneos: sin ordenar, el listado
 // que sobrevive depende del orden de enumeración del registro y parpadearía
 // de un escaneo a otro.
+// Un escaneo sin resultados devuelve un slice nil, y un slice nil se
+// serializa como `"software": null`, no como `"software": []`. El backend
+// declara ese campo obligatorio y sin allow_none, así que responde 422
+// "Field may not be null" y el shipper descarta el heartbeat entero, igual
+// que con un inventario demasiado grande. Se normaliza aquí, que es el
+// único punto por el que pasan los escaneos de los tres sistemas.
 func (a *Agent) capInventory(inv payload.Inventory) payload.Inventory {
+	if inv.Software == nil {
+		inv.Software = []payload.Software{}
+	}
+
 	sort.Slice(inv.Software, func(i, j int) bool {
 		return inv.Software[i].Name < inv.Software[j].Name
 	})

@@ -456,6 +456,32 @@ func TestCapInventoryLeavesSmallInventoriesIntact(t *testing.T) {
 	}
 }
 
+// Un escaneo que no encuentra nada debe viajar como lista vacía, no como
+// null. El backend declara `software` obligatorio y sin allow_none: con null
+// responde 422 "Field may not be null", el shipper lo clasifica como rechazo
+// permanente y se pierde el heartbeat completo.
+//
+// No es hipotético: los colectores de Linux y macOS devuelven hoy un
+// inventario vacío, así que cada agente de esos sistemas perdía un heartbeat
+// cada seis horas desde que existe el bucle de inventario.
+//
+// Se comprueba sobre el JSON y no sobre el slice porque el slice nil y el
+// vacío son indistinguibles con len(): la diferencia solo aparece al
+// serializar, que es donde estaba el fallo.
+func TestCapInventoryNeverSerializesSoftwareAsNull(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	got := a.capInventory(payload.Inventory{})
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if want := `{"software":[]}`; string(raw) != want {
+		t.Errorf("un inventario vacío se serializa como %s, se esperaba %s", raw, want)
+	}
+}
+
 // El inventario se adjunta a UN payload y se limpia. Si ese payload concreto
 // muere por un rechazo permanente —que casi nunca tiene que ver con el
 // inventario: reloj desincronizado, un porcentaje fuera de rango…— el
