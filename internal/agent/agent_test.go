@@ -664,3 +664,85 @@ func TestRestoreInventoryDoesNotOverwriteANewerScan(t *testing.T) {
 		t.Errorf("lastInventory = %+v, se esperaba el escaneo más reciente", got)
 	}
 }
+
+// ---------------------------------------------------------------------
+// F-03: clave revocada o rotada
+// ---------------------------------------------------------------------
+
+// Un 401 sostenido llenaba el buffer con heartbeats que ya nadie iba a
+// aceptar, hasta desbordarlo, y el usuario veía "error local: backend
+// devolvió status 401".
+func TestRejectedKeyStopsFillingTheBuffer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+
+	for i := 0; i < 3; i++ {
+		a.runOnce(context.Background())
+	}
+
+	if got := a.buf.Len(); got != 0 {
+		t.Errorf("el buffer tiene %d payloads; con la clave rechazada no debe guardarse ninguno", got)
+	}
+	if got := a.Status().State; got != control.StateKeyRejected {
+		t.Errorf("State = %q, se esperaba %q", got, control.StateKeyRejected)
+	}
+}
+
+// El estado tiene que llegar hasta el tray con un texto que explique qué
+// hacer, no con el código HTTP.
+func TestRejectedKeyIsVisibleInStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.runOnce(context.Background())
+
+	st := a.Status()
+	for _, want := range []string{"clave", "rotada"} {
+		if !strings.Contains(st.LastError, want) {
+			t.Errorf("LastError no menciona %q: %q", want, st.LastError)
+		}
+	}
+}
+
+// La rotación tiene que poder aplicarse sin reset previo. Antes hacían falta
+// cinco pasos por el tray, o editar a mano un fichero 0600 en cada equipo.
+func TestEnrollIsAcceptedWhenTheKeyWasRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	a := newDrainTestAgent(t, srv.URL, 15)
+	a.runOnce(context.Background())
+
+	const nueva = "nueva1234.0123456789abcdef"
+	if err := a.Enroll(nueva); err != nil {
+		t.Fatalf("Enroll() con la clave rechazada = %v, debería aceptarse", err)
+	}
+	if a.cfg.AgentKey != nueva {
+		t.Errorf("AgentKey = %q, se esperaba la nueva", a.cfg.AgentKey)
+	}
+	if got := a.Status().State; got != control.StateStarting {
+		t.Errorf("State = %q tras el alta, se esperaba %q", got, control.StateStarting)
+	}
+}
+
+// Y la garantía que protegía el caso general sigue en pie: con el agente
+// funcionando, un usuario local no puede reapuntarlo.
+func TestEnrollIsStillRejectedWhileTheAgentWorks(t *testing.T) {
+	a, _ := newTestAgent(t, testKey)
+
+	if err := a.Enroll("otra1234.0123456789abcdef"); err == nil {
+		t.Fatal("Enroll() sobre un agente en marcha = nil, se esperaba rechazo")
+	}
+	if a.cfg.AgentKey != testKey {
+		t.Error("la clave se pisó pese a que el agente estaba dado de alta")
+	}
+}

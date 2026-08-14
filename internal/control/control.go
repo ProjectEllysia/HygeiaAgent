@@ -39,6 +39,20 @@ const (
 	// ahí afirmaría un heartbeat que todavía no ha ocurrido, y
 	// `local_error` sería una falsa alarma.
 	StateStarting = "starting" // ⚪ configurado, sin resultado del primer envío
+
+	// StateKeyRejected es el quinto, y existe porque "el backend no me
+	// acepta la clave" no es lo mismo que "algo local va mal" (F-03).
+	//
+	// El caso lo produce POST /hygeia/assets/{id}/rotate-key del servidor,
+	// que invalida la clave anterior en el acto. Antes eso se veía como
+	// local_error con el texto "backend devolvió status 401", que no dice ni
+	// qué ha pasado ni qué hacer, y encima el agente seguía llenando el
+	// buffer con heartbeats que ya nadie iba a aceptar.
+	//
+	// Separarlo permite las tres cosas que hacen falta: un mensaje que
+	// explique el problema, dejar de guardar lo que no se puede entregar, y
+	// aceptar una clave nueva SIN pedir antes un reset.
+	StateKeyRejected = "key_rejected" // 🔴 el backend rechaza la clave
 )
 
 // Status es la respuesta de GET /status.

@@ -119,12 +119,21 @@ func (a *Agent) Status() control.Status {
 	}
 }
 
-// Enroll persiste la clave que llega del tray y arranca el envío.
+// Enroll persiste la clave que llega del tray o de `hygeia-agent enroll` y
+// arranca el envío.
 //
-// Solo se acepta cuando el agente está SIN configurar (§11.7): así un
-// usuario local sin privilegios no puede pisar la clave de un activo ya dado
-// de alta ni reapuntar el agente. Para rotar una clave ya existente hay que
-// editar la config del servicio, que tiene permisos 0600.
+// Se acepta en dos situaciones, y solo en esas dos:
+//
+//   - SIN configurar, el alta normal (§11.7).
+//   - Con la clave RECHAZADA por el backend (F-03). Aquí la garantía que
+//     protege el caso general no aplica: lo que se protege es que un usuario
+//     local sin privilegios no pueda reapuntar un agente que está
+//     funcionando, y un agente cuya clave el servidor ya ha invalidado no
+//     está funcionando ni protege nada. Sin esta excepción, rotar una clave
+//     obligaba a un reset previo: cinco pasos por el tray, o editar a mano un
+//     fichero con permisos 0600 en cada equipo de la flota.
+//
+// Con el agente en marcha y su clave válida se sigue rechazando.
 func (a *Agent) Enroll(agentKey string) error {
 	if err := control.ValidateAgentKey(agentKey); err != nil {
 		return err
@@ -132,7 +141,7 @@ func (a *Agent) Enroll(agentKey string) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cfg.IsConfigured() {
+	if a.cfg.IsConfigured() && a.state != control.StateKeyRejected {
 		return fmt.Errorf("el agente ya está dado de alta; para rotar la clave edita %s", a.cfg.Path())
 	}
 
@@ -500,7 +509,22 @@ func (a *Agent) runOnce(ctx context.Context) time.Duration {
 	if err != nil {
 		var permErr *shipper.PermanentError
 		var thrErr *shipper.ThrottledError
+		var authErr *shipper.AuthError
 		switch {
+		case errors.As(err, &authErr):
+			// La clave ya no vale (revocada o rotada). El payload NO va al
+			// buffer: solo se entregaría si alguien se entera, pide una clave
+			// nueva y la aplica antes de que el heartbeat envejezca más allá
+			// de la ventana de backfill. Mientras tanto llenaría el buffer de
+			// payloads condenados y no quedaría sitio para una caída de red
+			// de verdad.
+			//
+			// Lo que hace falta es que se ENTERE, y de eso se encarga el
+			// estado: el tray lo enseña, `hygeia-agent info` lo dice y
+			// `doctor` explica qué hacer.
+			a.log.Warn("el backend rechaza la clave de agente", "err", err)
+			a.setState(control.StateKeyRejected, err)
+			return 0
 		case errors.As(err, &permErr):
 			// El backend rechazó ESTE payload (esquema, reloj, tamaño), no
 			// que esté caído: guardarlo en el buffer solo garantizaría que

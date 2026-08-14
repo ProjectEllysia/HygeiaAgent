@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -154,5 +156,65 @@ func TestCustomCAIsAddedToTheSystemStoreAndDoesNotReplaceIt(t *testing.T) {
 	}
 	if got.Equal(sistema) {
 		t.Error("el certificado de caFile no se añadió al almacén")
+	}
+}
+
+// ---------------------------------------------------------------------
+// F-03: la clave rechazada es un cuarto tipo de fallo
+// ---------------------------------------------------------------------
+
+// Reintentar un 401 es tiempo tirado: la misma clave da el mismo 401 las
+// cuatro veces. Antes se trataba como transitorio y gastaba el backoff
+// exponencial completo en cada ciclo.
+func TestAuthFailureDoesNotRetry(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		var intentos atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			intentos.Add(1)
+			w.WriteHeader(status)
+		}))
+
+		s := mustShipper(t, srv.URL, "abcd1234.0123456789abcdef")
+		fastBackoff(s)
+		_, err := s.Send(context.Background(), &payload.Payload{AgentVersion: "test"})
+		srv.Close()
+
+		var authErr *AuthError
+		if !errors.As(err, &authErr) {
+			t.Errorf("status %d: Send() error = %T (%v), se esperaba *AuthError", status, err, err)
+		}
+		if got := intentos.Load(); got != 1 {
+			t.Errorf("status %d: se hicieron %d intentos, se esperaba 1", status, got)
+		}
+	}
+}
+
+// 407 lo devuelve un PROXY pidiendo sus credenciales, no el backend
+// rechazando la clave de agente. Confundirlos mandaría a rotar una clave que
+// está perfectamente bien.
+func TestProxyAuthenticationIsNotAKeyProblem(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusProxyAuthRequired)
+	}))
+	defer srv.Close()
+
+	s := mustShipper(t, srv.URL, "abcd1234.0123456789abcdef")
+	fastBackoff(s)
+	_, err := s.Send(context.Background(), &payload.Payload{AgentVersion: "test"})
+
+	var authErr *AuthError
+	if errors.As(err, &authErr) {
+		t.Error("un 407 del proxy se clasificó como clave de agente rechazada")
+	}
+}
+
+// El mensaje lo acaba leyendo una persona que tiene que decidir qué hacer.
+func TestAuthErrorSaysWhatHappened(t *testing.T) {
+	err := (&AuthError{StatusCode: 401}).Error()
+
+	for _, want := range []string{"clave", "revocada", "rotada"} {
+		if !strings.Contains(err, want) {
+			t.Errorf("el mensaje no menciona %q: %s", want, err)
+		}
 	}
 }

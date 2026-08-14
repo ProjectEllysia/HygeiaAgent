@@ -194,6 +194,36 @@ func (e *ThrottledError) Error() string {
 		e.StatusCode, e.RetryAfter)
 }
 
+// AuthError indica que el backend rechazó la CLAVE (401 o 403), no el
+// payload ni por cadencia. Es el cuarto y último tipo de fallo del shipper.
+//
+// Lo produce sobre todo la rotación de claves del servidor
+// (POST /hygeia/assets/{id}/rotate-key), que invalida la anterior en el acto.
+//
+// Pide una reacción propia por dos motivos:
+//
+//   - Reintentar no tiene sentido. La misma clave va a dar el mismo 401, así
+//     que los cuatro intentos con espera exponencial son tiempo tirado.
+//   - Guardar el payload en el buffer tampoco. Solo se entregaría si alguien
+//     se entera, pide una clave nueva y la aplica ANTES de que el heartbeat
+//     envejezca más allá de la ventana de backfill del backend; mientras
+//     tanto, el buffer se llena de payloads condenados y no queda sitio para
+//     una caída de red de verdad. Lo que hace falta es que se ENTERE, y de
+//     eso se encarga el estado key_rejected.
+//
+// No se clasifica como PermanentError precisamente porque el payload no
+// tiene nada de malo: con una clave válida se entregaría sin problema. Lo que
+// caduca no es el dato, es la credencial.
+type AuthError struct {
+	StatusCode int
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf(
+		"shipper: el backend rechazó la clave de agente (status %d); ha sido revocada o rotada",
+		e.StatusCode)
+}
+
 // defaultThrottleWait es cuánto esperar cuando el backend responde 429 pero
 // no dice cuánto (versión antigua sin expose_details, o un proxy que corta
 // por su cuenta). Cinco segundos es el suelo por defecto del backend.
@@ -247,10 +277,12 @@ func clampThrottleWait(d time.Duration) time.Duration {
 }
 
 // isPermanentStatus identifica los códigos donde el problema es el propio
-// cuerpo de la petición, no la disponibilidad del backend. 401 (clave
-// inválida) queda fuera a propósito: no es el payload lo que falla, y tras
-// un Reset+Enroll con una clave correcta el mismo payload sí podría
-// entregarse — por eso sigue tratándose como transitorio (§7, agent.Reset).
+// cuerpo de la petición, no la disponibilidad del backend.
+//
+// 401 y 403 quedan fuera, y siguen fuera: no es el payload lo que falla, y
+// con una clave válida ese mismo payload se entregaría. Lo que caduca es la
+// credencial, no el dato. Van por AuthError, que es un tipo aparte porque
+// pide una reacción distinta de las otras dos (ver isAuthStatus).
 func isPermanentStatus(code int) bool {
 	switch code {
 	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
@@ -258,6 +290,13 @@ func isPermanentStatus(code int) bool {
 	default:
 		return false
 	}
+}
+
+// isAuthStatus son los códigos con los que el backend dice que la clave no
+// vale. 407 NO está: ese lo devuelve un proxy pidiendo sus propias
+// credenciales, que es un problema de red y no de la clave de agente.
+func isAuthStatus(code int) bool {
+	return code == http.StatusUnauthorized || code == http.StatusForbidden
 }
 
 // Send serializa el payload, lo gzip-comprime y hace POST al backend con
@@ -316,6 +355,14 @@ func (s *Shipper) Send(ctx context.Context, p *payload.Payload) (*IngestResponse
 				throttled := newThrottledError(resp)
 				_ = resp.Body.Close()
 				return nil, throttled
+			}
+			// Sin reintentos tampoco: la misma clave va a dar el mismo 401
+			// las cuatro veces. Un proxy que pida autenticación responde 407,
+			// no 401, así que aquí no hay ambigüedad: quien rechaza la
+			// credencial es el backend (F-03).
+			if isAuthStatus(resp.StatusCode) {
+				_ = resp.Body.Close()
+				return nil, &AuthError{StatusCode: resp.StatusCode}
 			}
 			_ = resp.Body.Close()
 			if isPermanentStatus(resp.StatusCode) {
