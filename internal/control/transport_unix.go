@@ -34,8 +34,22 @@ func Address() string { return socketPath() }
 // Para que el tray (que corre como el usuario de sesión) pueda conectar,
 // pon al usuario en un grupo dedicado y exporta su GID en
 // HYGEIA_CONTROL_GID.
+// maxSocketPath es lo que cabe en el sun_path de una dirección de socket
+// Unix. El campo tiene tamaño fijo: 104 bytes en macOS y BSD, 108 en Linux.
+// Se usa el menor de los dos, que es el que de verdad acota.
+const maxSocketPath = 104
+
 func Listen() (net.Listener, error) {
 	path := socketPath()
+	// Comprobado antes del bind porque el error del sistema no dice nada:
+	// pasarse de sun_path se reporta como un "invalid argument" pelado, sin
+	// mencionar la longitud ni la ruta. Tres iteraciones de CI se fueron en
+	// averiguar exactamente eso.
+	if len(path) > maxSocketPath {
+		return nil, fmt.Errorf(
+			"control: la ruta del socket ocupa %d bytes y el máximo del sistema es %d: %q",
+			len(path), maxSocketPath, path)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("control: creando directorio del socket: %w", err)
 	}

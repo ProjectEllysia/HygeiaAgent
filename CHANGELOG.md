@@ -41,6 +41,15 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
   nombraba el fichero (`ld: unknown file type in '.../000000.o'`). Renombrado a
   `rsrc_windows.syso`, que es el nombre que Go usa para restringirlo a Windows.
   La CI comprueba ahora que ningún `.syso` se quede sin sufijo.
+- **Los tests del canal de control fallaban en macOS** por una ruta de socket
+  demasiado larga. La dirección de un socket Unix viaja en un campo de tamaño
+  fijo (104 bytes en macOS, 108 en Linux) y los tests la construían bajo
+  `t.TempDir()`, que en macOS cuelga de `/var/folders/…` y suma 45 caracteres
+  más que en Linux. Afectaba solo a los tests: en producción el socket es
+  `/run/hygeia-agent.sock`, 22 bytes. `Listen()` explica ahora el problema en
+  vez de propagar el `invalid argument` del sistema, y hay una prueba que
+  comprueba el límite en todas las plataformas tipo Unix, no solo donde
+  aprieta.
 
 ### Rendimiento
 

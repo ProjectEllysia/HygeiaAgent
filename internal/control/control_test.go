@@ -75,6 +75,21 @@ func newTestServerWithLog(t *testing.T, status StatusFunc, enroll EnrollFunc, re
 	client := NewClient()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
+		// Si Serve ya ha fallado, no tiene sentido seguir sondeando tres
+		// segundos para acabar diciendo "no llegó a aceptar conexiones": ese
+		// mensaje genérico escondía el error real —el bind del socket
+		// fallando por una ruta demasiado larga— y costó varias iteraciones
+		// de CI averiguar qué pasaba de verdad.
+		select {
+		case err := <-errCh:
+			// Devolverlo: el t.Cleanup de arriba también espera en este
+			// canal, y dejarlo vacío convertiría un fallo claro en dos
+			// confusos ("el servidor no cerró a tiempo").
+			errCh <- err
+			t.Fatalf("el canal de control no pudo arrancar: %v", err)
+		default:
+		}
+
 		cctx, ccancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		_, err := client.Status(cctx)
 		ccancel()
@@ -83,7 +98,7 @@ func newTestServerWithLog(t *testing.T, status StatusFunc, enroll EnrollFunc, re
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatal("el canal de control no llegó a aceptar conexiones")
+	t.Fatal("el canal de control no llegó a aceptar conexiones (Serve no reportó error)")
 	return nil
 }
 
