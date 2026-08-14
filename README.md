@@ -45,7 +45,7 @@ llegue la clave.
 ## Compilar
 
 ```bash
-go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.4" ./cmd/hygeia-agent
+go build -ldflags "-X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version=1.0.5" ./cmd/hygeia-agent
 ```
 
 El tray, en Windows, sin ventana de consola:
@@ -61,12 +61,71 @@ Sin `-ldflags`, el binario reporta la versión `0.1.0-dev` al backend.
 | `hygeia-agent` | ✅ | ✅ | ✅ (cross-compila) |
 | `hygeia-tray` | ✅ | ✅ | requiere cgo y toolchain nativo |
 
-En Windows hay además un instalador de doble clic, que empaqueta ambos binarios con el
-`serverUrl` ya relleno:
+## Compilar los paquetes de distribución
+
+Dos herramientas, cada una para lo suyo. Ninguna de las dos escribe en el repositorio: `dist/`
+e `installer/dist/` están ignoradas.
+
+### Todo, para las cinco plataformas
+
+```bash
+goreleaser release --snapshot --clean --skip=publish
+```
+
+Unos siete segundos. Deja en `dist/` los binarios, los archivos `.tar.gz`/`.zip`, los paquetes
+`.deb` y `.rpm` y `checksums.txt`. Es exactamente lo que hará la CI al publicar, así que sirve
+para comprobar una release antes de etiquetar.
+
+### El instalador de Windows
 
 ```powershell
 .\installer\build-installer.ps1
 ```
+
+Compila los dos `.exe`, genera el script de Inno Setup y produce
+`installer/dist/hygeia-agent-setup-<version>.exe`. Requiere:
+
+- Un `config.toml` en la raíz del repositorio, del que toma el `serverUrl` que se empotra en el
+  instalador. **No está en el repositorio** (lleva datos del despliegue): sale de
+  `cp config.example.toml config.toml`.
+- Inno Setup. Si no lo encuentra, intenta instalarlo con WinGet, y si tampoco puede deja el
+  `.iss` listo para compilarlo a mano.
+
+La versión sale de `VERSION.txt`, o de `-Version 1.2.3` para una prueba puntual.
+
+Del `config.toml` empotrado se quitan dos campos a propósito: la `agentKey` —distribuir la del
+desarrollador filtraría esa clave a todos los clientes y los haría colisionar sobre el mismo
+activo— y el `bufferPath`, que si es relativo se resolvería contra el directorio de trabajo del
+servicio y rompería el buffer.
+
+### Por qué son dos herramientas y no una
+
+Compilar los binarios de Windows dos veces cuesta segundos y no merece la pena unificarlo. Lo
+que hace el instalador no lo hace goreleaser: para el servicio y cierra el tray antes de
+sobrescribir los ejecutables (si no, están bloqueados y la copia falla), registra el arranque
+del tray para la sesión del usuario en vez de para el token elevado del instalador, y no pisa
+el `config.toml` del cliente al actualizar.
+
+## Publicar una versión
+
+```bash
+# 1. VERSION.txt y la etiqueta TIENEN que coincidir: hay un guardián en la CI.
+echo 1.0.6 > VERSION.txt
+git commit -am "chore: versión 1.0.6"
+
+# 2. Etiquetar y empujar. Esto es lo que dispara la publicación.
+git tag v1.0.6
+git push origin main --tags
+```
+
+El flujo compila las cinco plataformas, genera los paquetes y las sumas, ejecuta
+`build-installer.ps1` en un runner de Windows, adjunta el `.exe` resultante y crea la release
+**en borrador**. Queda revisarla en GitHub y darle a publicar.
+
+Para que el instalador se genere en la CI hace falta definir la variable de repositorio
+`HYGEIA_SERVER_URL` (Settings → Secrets and variables → Actions → Variables). Sin ella ese paso
+se salta con un aviso, en vez de publicar un instalador que apunte al marcador de posición del
+ejemplo.
 
 ## Instalar desde una release
 
