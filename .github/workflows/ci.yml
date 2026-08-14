@@ -25,10 +25,9 @@ env:
   # Con `1.25.x` se coge el último parche de la serie sin saltar de minor por
   # sorpresa. Al subir el mínimo en go.mod, hay que subir también este número.
   #
-  # NOTA: esto NO arregla el fallo de enlazado de macOS. Se llegó a pensar que
-  # sí —la imagen macos-26-arm64 es posterior a Go 1.25.0— pero el fallo se
-  # reproduce igual con 1.24.0, 1.25.0 y 1.25.12. Ver el comentario de la
-  # matriz de build-and-test.
+  # NOTA: esto no tenía nada que ver con el fallo de enlazado de macOS, pese a
+  # lo que se pensó en su momento. Ese fallo lo causaba un .syso de Windows
+  # enlazándose en todas las plataformas; ver el paso de los .syso más abajo.
   GO_VERSION: "1.25.x"
 
 jobs:
@@ -60,6 +59,24 @@ jobs:
       - name: go.mod está al día
         run: go mod tidy -diff
 
+      # Un .syso es un objeto nativo, y Go lo enlaza en TODAS las plataformas
+      # salvo que el nombre lleve sufijo de sistema operativo. Un rsrc.syso
+      # (recursos de Windows: icono y metadatos del .exe) sin ese sufijo tuvo
+      # el job de macOS en rojo durante semanas, con un error que ni siquiera
+      # nombraba el fichero culpable:
+      #   ld: unknown file type in '.../000000.o'
+      # Comprobarlo cuesta tres líneas; encontrarlo costó varias jornadas.
+      - name: los .syso llevan sufijo de plataforma
+        run: |
+          stray=$(git ls-files '*.syso' | grep -v '_windows\(_[a-z0-9]*\)\?\.syso$' || true)
+          if [ -n "$stray" ]; then
+            echo "Estos .syso no llevan sufijo de plataforma y se enlazarán también"
+            echo "en Linux y macOS, donde el enlazador no sabe leerlos:"
+            echo "$stray"
+            echo "Renómbralos a <nombre>_windows.syso"
+            exit 1
+          fi
+
       # La acción v9 es la primera de la serie que soporta golangci-lint v2,
       # que es lo que declara .golangci.yml (`version: "2"`). Con la v6 la
       # acción instalaba un golangci-lint v1 compilado con Go 1.24 y fallaba
@@ -86,20 +103,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-15 y macos-latest a la vez, y no es redundante: macos-latest
-        # apunta hoy a macos-26-arm64, donde el enlazador de Apple rechaza los
-        # objetos que genera Go ("ld: unknown file type in ...o"). Ese fallo
-        # NO es una regresión de este repositorio: el job de macOS no ha
-        # pasado nunca, con Go 1.24.0, 1.25.0 y 1.25.12, y el rodeo
-        # `-Wl,-no_fixup_chains` que hubo un tiempo tampoco lo arregló.
-        #
-        # macos-15 da cobertura real de macOS mientras se investiga, y
-        # macos-26 se sigue ejecutando —tolerando el fallo— porque es el
-        # macOS que acabarán teniendo los clientes y hay que enterarse el día
-        # que se arregle.
-        os: [ubuntu-latest, windows-latest, macos-15, macos-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -108,62 +113,14 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
 
-      # TEMPORAL — diagnóstico del toolchain de macOS.
-      #
-      # Se quita en cuanto se sepa la causa del fallo de enlazado. Está aquí
-      # porque no hay forma de reproducirlo en local y la ejecución de la CI
-      # es el único sitio donde se pueden leer estos datos. Cubre las
-      # hipótesis en juego: un `ld` distinto del de Apple por delante en el
-      # PATH, unas Command Line Tools mal seleccionadas, o un SDK ausente.
-      - name: diagnóstico del toolchain (temporal)
-        if: runner.os == 'macOS'
-        continue-on-error: true
-        run: |
-          echo "::group::qué ld y qué clang se están usando"
-          which -a ld || true
-          ld -v 2>&1 | head -5 || true
-          which -a clang || true
-          clang --version || true
-          echo "::endgroup::"
+      - name: go vet
+        run: go vet ./...
 
-          echo "::group::Xcode y SDK"
-          xcode-select -p || true
-          xcrun --show-sdk-path || true
-          xcrun --show-sdk-version || true
-          ls -1 /Library/Developer/CommandLineTools/SDKs/ 2>/dev/null || true
-          ls -1 /Applications | grep -i xcode || true
-          echo "::endgroup::"
-
-          echo "::group::PATH"
-          echo "$PATH" | tr ':' '\n'
-          echo "::endgroup::"
-
-          echo "::group::go env"
-          go env CC CXX CGO_ENABLED GOOS GOARCH GOROOT
-          echo "::endgroup::"
-
-          echo "::group::¿falla también un programa Go mínimo?"
-          # Si esto falla, el problema no tiene nada que ver con este
-          # repositorio: es la imagen. Si pasa, el problema está en alguna
-          # dependencia concreta.
-          mkdir -p "$RUNNER_TEMP/minimal" && cd "$RUNNER_TEMP/minimal"
-          printf 'package main\n\nfunc main() {}\n' > main.go
-          go mod init minimal >/dev/null
-          echo "-- con cgo (por defecto en nativo):"
-          go build -o /dev/null . && echo "   OK" || echo "   FALLA"
-          echo "-- sin cgo:"
-          CGO_ENABLED=0 go build -o /dev/null . && echo "   OK" || echo "   FALLA"
-          echo "::endgroup::"
-
-          echo "::group::¿y el agente sin cgo?"
-          cd "$GITHUB_WORKSPACE"
-          CGO_ENABLED=0 go build -o /dev/null ./cmd/hygeia-agent && echo "   OK" || echo "   FALLA"
-          echo "::endgroup::"
-
-      # Sin CGO_LDFLAGS a mano. Antes se pasaba `-Wl,-no_fixup_chains` en
-      # macOS como rodeo para el enlazador de Xcode 16.3, pero nunca llegó a
-      # arreglar nada —el job siguió rojo— y de paso pisaba el `-O2 -g` que
-      # setup-go pone por defecto.
+      # Sin CGO_LDFLAGS a mano. El `-Wl,-no_fixup_chains` que hubo aquí era
+      # un rodeo para un problema que nunca fue del enlazador: lo que rompía
+      # macOS era un fichero de recursos de Windows enlazándose en todas las
+      # plataformas (ver el paso de los .syso en static-checks). Nunca arregló
+      # nada y de paso pisaba el `-O2 -g` que setup-go pone por defecto.
       - name: go build (los dos binarios y todos los paquetes)
         run: go build ./...
 

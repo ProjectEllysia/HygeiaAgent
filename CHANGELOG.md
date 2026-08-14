@@ -34,13 +34,13 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
   `setup-go` trata la directiva `go` del `go.mod` como una versión exacta. Se
   perdían doce parches, varios de seguridad. Ahora se fija `1.25.x`.
 
-### Conocido, sin resolver
-
-- **El build de macOS falla en la integración continua sobre la imagen
-  `macos-26-arm64`**, con `ld: unknown file type`. No es una regresión: ese job
-  no ha pasado nunca, y el fallo se reproduce igual con Go 1.24.0, 1.25.0 y
-  1.25.12. Mientras se investiga, la matriz incluye también `macos-15`, que sí
-  da cobertura real, y `macos-latest` se ejecuta tolerando el fallo.
+- **El build de macOS llevaba semanas roto por un fichero de recursos de
+  Windows.** `rsrc.syso` (el icono y los metadatos del `.exe`) no llevaba
+  sufijo de plataforma en el nombre, así que Go lo enlazaba en **todos** los
+  sistemas. En macOS eso rompía el enlazado con un error que ni siquiera
+  nombraba el fichero (`ld: unknown file type in '.../000000.o'`). Renombrado a
+  `rsrc_windows.syso`, que es el nombre que Go usa para restringirlo a Windows.
+  La CI comprueba ahora que ningún `.syso` se quede sin sufijo.
 
 ### Rendimiento
 
