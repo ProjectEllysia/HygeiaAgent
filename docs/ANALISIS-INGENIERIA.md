@@ -1101,8 +1101,15 @@ No hizo falta corregir nada del colector. Queda por hacer la misma comparación 
 
 **Impacto en el usuario: Medio · Facilidad: Fácil (la decisión es lo caro, no el código)**
 
-Esto salió al implementar `F-01` y **queda sin resolver a propósito**, porque la decisión no es
-solo técnica.
+> **Estado: resuelto, por la opción 1.** La normalización vive en
+> `services/inventory_adapter.py` del servidor, no en el agente: el inventario guardado conserva
+> la versión exacta del paquete y solo el motor ve la recortada. Se aplica únicamente a `dpkg`.
+> La prueba principal no compara cadenas, usa `version_compare` y comprueba los dos lados —que
+> sin recortar la versión cae por debajo del inicio del rango, y que recortada casa—, así que
+> documenta el fallo además de fijar el arreglo.
+
+Esto salió al implementar `F-01`. La decisión no era solo técnica, de ahí que se dejara anotada
+antes de tocar nada.
 
 **El problema.** Lybra compara versiones con `_version_key` (`themis/lybra/kb.py:57`), que parte
 la cadena en tramos de dígitos y de letras y descarta los separadores. Las letras ordenan por
@@ -1133,9 +1140,9 @@ las coincidencias del primer caso. Resolver el falso positivo de verdad exige ot
 datos —los avisos de seguridad de la propia distribución (DSA, USN, OVAL)—, que es un trabajo
 distinto y bastante mayor.
 
-**Qué hacer, en orden de preferencia.**
+**Qué se hizo, y las alternativas que se descartaron.**
 
-1. **Normalizar en el servidor, no en el agente.** En `services/inventory_adapter.py`, que ya es
+1. **Normalizar en el servidor, no en el agente.** ← la elegida. En `services/inventory_adapter.py`, que ya es
    donde se decide qué versión ve el motor —ahí vive la regla de JetBrains—, y que ya recibe el
    campo `source` para saber si aplica la gramática de Debian o la de RPM. Así el inventario
    guardado conserva la versión exacta del paquete para el informe en PDF y para saber si un
@@ -1717,9 +1724,9 @@ falla en una red con inspección TLS.
 > **`F-01`, `A-12`, `F-05`**
 > Esfuerzo estimado: 6 a 8 días · Impacto: **Alto**
 >
-> **Estado: hecha, salvo el inventario de macOS.** Quedan fuera dos cosas: `F-01` en macOS
-> (`inventory_darwin.go` sigue devolviendo una lista vacía) y `F-14`, la cuestión sobre el
-> formato de las versiones que apareció al implementar esta fase y que está sin decidir.
+> **Estado: hecha, salvo el inventario de macOS.** Lo único que queda es `F-01` en macOS:
+> `inventory_darwin.go` sigue devolviendo una lista vacía. `F-14`, que apareció al implementar
+> esta fase, se resolvió en el servidor.
 
 **Por qué van juntas.** Las tres son el mismo subsistema. `F-01` (Linux y macOS) y `A-12`
 (la rama de usuario en Windows) son el mismo trabajo de "hacer que el inventario diga la verdad"

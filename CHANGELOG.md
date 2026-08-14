@@ -29,6 +29,12 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
   obligatorio y no nulo: respondía 422 y el agente descartaba el heartbeat
   completo. Afectaba a todos los agentes de Linux y macOS, que perdían un
   heartbeat cada seis horas desde que existe el bucle de escaneo.
+- **Las versiones de los paquetes de Linux no casaban con los rangos del NVD**
+  (`F-14`, corregido en el servidor). El sufijo de empaquetado de Debian hacía
+  que `2.39-0ubuntu8.3` ordenase por debajo de `2.39`, así que un rango
+  "vulnerable desde 2.39" no casaba y la vulnerabilidad no se reportaba. El
+  adaptador a Lybra usa ahora la versión de origen; el inventario guardado
+  conserva la versión exacta del paquete.
 - **El inventario de Windows no veía el software instalado por el usuario**
   (`A-12`). Se leía `HKEY_CURRENT_USER`, que para un servicio corriendo como
   `LocalSystem` es la rama de `LocalSystem` —cuya clave `Uninstall` ni
