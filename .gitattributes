@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Los ficheros Go se quedan en LF también en el árbol de trabajo: gofmt
+# considera CRLF un fichero mal formateado, y con "text=auto" a secas
+# `gofmt -l` marcaba en Windows ficheros cuyo blob estaba perfecto.
+*.go text eol=lf
