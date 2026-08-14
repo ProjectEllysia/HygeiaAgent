@@ -20,10 +20,16 @@ before:
     - go mod tidy -diff
 
 builds:
-  # El agente: las cinco plataformas del plan. CGO desactivado a propósito —
-  # sin él, un binario de Linux no depende de la glibc de la máquina donde se
-  # compiló y corre igual en una Debian vieja que en una Fedora nueva.
-  - id: hygeia-agent
+  # El agente se compila en DOS entradas con los mismos ajustes, separadas
+  # solo por sistema operativo. No es duplicación gratuita: es lo que permite
+  # que el archivo de Windows lleve el agente Y el tray, y el del resto solo
+  # el agente, sin que goreleaser proteste por archivos con distinto número
+  # de binarios (ver la sección `archives`).
+  #
+  # CGO desactivado a propósito: sin él, un binario de Linux no depende de la
+  # glibc de la máquina donde se compiló y corre igual en una Debian vieja que
+  # en una Fedora nueva.
+  - id: agent-unix
     main: ./cmd/hygeia-agent
     binary: hygeia-agent
     env:
@@ -31,12 +37,20 @@ builds:
     ldflags:
       - -s -w
       - -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version={{ .Version }}
-    goos: [linux, windows, darwin]
+    goos: [linux, darwin]
     goarch: [amd64, arm64]
-    ignore:
-      # Windows en ARM no está en el plan y nadie lo ha pedido.
-      - goos: windows
-        goarch: arm64
+
+  - id: agent-windows
+    main: ./cmd/hygeia-agent
+    binary: hygeia-agent
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/ProjectEllysia/Ellysia-Hygeia/internal/version.Version={{ .Version }}
+    goos: [windows]
+    # Windows en ARM no está en el plan y nadie lo ha pedido.
+    goarch: [amd64]
 
   # El icono de bandeja, solo para Windows.
   #
@@ -46,7 +60,7 @@ builds:
   # el README ya dice que un servidor headless corre hygeia-agent solo, y desde
   # F-02 el alta y el diagnóstico se hacen por línea de órdenes. Si algún día
   # hay demanda de bandeja en Linux, se añade aquí un goos más.
-  - id: hygeia-tray
+  - id: tray-windows
     main: ./cmd/hygeia-tray
     binary: hygeia-tray
     env:
@@ -58,28 +72,35 @@ builds:
     goos: [windows]
     goarch: [amd64]
 
-# Dos archivos separados, y no uno con los dos binarios dentro: como el tray
-# solo se compila para Windows, un archivo único llevaría dos ejecutables en
-# Windows y uno en el resto. goreleaser lo rechaza, y con razón — quien
-# descarga no debería tener que averiguar por qué su .tar.gz trae menos cosas
-# que el .zip de al lado.
+# En Windows, UN archivo con los dos ejecutables dentro.
+#
+# Es la misma idea que hace útil al instalador de Inno Setup: quien se lleva
+# Hygeia a un equipo de escritorio se lleva el agente y su icono de bandeja
+# juntos, no dos descargas que hay que emparejar a mano. El primer intento
+# los separó porque goreleaser rechaza un mismo archivo con dos binarios en
+# una plataforma y uno en otra; la respuesta correcta a eso es separar las
+# COMPILACIONES, no las descargas.
+#
+# En Linux y macOS el archivo lleva solo el agente, que es todo lo que hay
+# para esas plataformas.
 archives:
-  - id: agent
-    ids: [hygeia-agent]
-    name_template: "hygeia-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: unix
+    ids: [agent-unix]
+    name_template: "hygeia_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - config.example.toml
       - README.md
       - CHANGELOG.md
 
-  - id: tray
-    ids: [hygeia-tray]
-    name_template: "hygeia-tray_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: windows
+    ids: [agent-windows, tray-windows]
+    name_template: "hygeia_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [zip]
+    files:
+      - config.example.toml
+      - README.md
+      - CHANGELOG.md
 
 checksum:
   name_template: checksums.txt
@@ -89,7 +110,7 @@ checksum:
 # ejecuta hygeia-agent install".
 nfpms:
   - id: packages
-    ids: [hygeia-agent]
+    ids: [agent-unix]
     package_name: hygeia-agent
     vendor: Ellysia
     homepage: https://github.com/ProjectEllysia/HygeiaAgent
@@ -138,7 +159,7 @@ release:
     ## Instalación en Linux
 
     ```
-    sudo apt install ./hygeia-agent_{{ .Version }}_amd64.deb
+    sudo apt install ./hygeia-agent_{{ .Version }}_linux_amd64.deb
     sudo systemctl start hygeia-agent
     echo "$CLAVE" | sudo hygeia-agent enroll
     ```

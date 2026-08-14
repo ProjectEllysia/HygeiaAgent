@@ -74,6 +74,13 @@ Cada etiqueta `v*` publica en GitHub binarios para `linux/amd64`, `linux/arm64`,
 `windows/amd64`, `darwin/amd64` y `darwin/arm64`, paquetes `.deb` y `.rpm`, el instalador de
 Windows y un `checksums.txt`.
 
+| Fichero | Qué lleva dentro |
+|---|---|
+| `hygeia-agent-setup-<version>.exe` | **La forma normal de instalar en Windows.** Instalador de doble clic: los dos binarios, el `serverUrl` ya relleno, el servicio registrado y el tray en el arranque de sesión. |
+| `hygeia_<version>_windows_amd64.zip` | Los mismos dos ejecutables sueltos, para despliegue automatizado sin interfaz. |
+| `hygeia_<version>_linux_*.tar.gz` · `hygeia_<version>_darwin_*.tar.gz` | Solo `hygeia-agent`: fuera de Windows no se distribuye el tray. |
+| `hygeia-agent_<version>_linux_*.deb` · `.rpm` | Paquetes nativos, con el servicio registrado al instalar. |
+
 **Los binarios todavía no están firmados.** Comprueba la suma antes de instalar, y cuenta con el
 aviso de SmartScreen en Windows:
 
@@ -84,13 +91,13 @@ sha256sum -c checksums.txt --ignore-missing
 En Debian, Ubuntu y derivadas:
 
 ```bash
-sudo apt install ./hygeia-agent_<version>_amd64.deb
+sudo apt install ./hygeia-agent_<version>_linux_amd64.deb
 ```
 
 En Fedora, RHEL y derivadas:
 
 ```bash
-sudo dnf install ./hygeia-agent_<version>_amd64.rpm
+sudo dnf install ./hygeia-agent_<version>_linux_amd64.rpm
 ```
 
 El paquete deja el binario en `/usr/bin`, la configuración en `/etc/hygeia/config.toml` (con
