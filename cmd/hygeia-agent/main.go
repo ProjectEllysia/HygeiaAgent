@@ -139,13 +139,25 @@ func svcConfig() *service.Config {
 		Name:        "hygeia-agent",
 		DisplayName: "Ellysia Hygeia Agent",
 		Description: "Recolecta métricas de salud del activo y las envía al backend de Ellysia.",
+		// Que el SO lo reinicie si muere: un agente caído es un activo mudo,
+		// que es indistinguible de un activo apagado.
+		//
+		// Cada clave la lee UNA plataforma y la otra la ignora: "Restart" es
+		// de la plantilla de systemd y "OnFailure" de la configuración de
+		// recuperación del gestor de servicios de Windows. No son
+		// alternativas, hacen falta las dos.
+		//
+		// Aquí había además "RestartSec" y "StartLimitBurst". No hacían nada:
+		// kardianos los tiene FIJOS en su plantilla de systemd
+		// (service_systemd_linux.go, RestartSec=120 y StartLimitBurst=10) y no
+		// los expone como opciones. Se quitan en vez de dejarlos, porque una
+		// configuración que no se aplica es peor que ninguna: hace pensar que
+		// el reintento está ajustado cuando en realidad se espera dos minutos.
+		// Cambiar esos valores exigiría una plantilla propia vía
+		// service.KeyValue{"SystemdScript": ...}.
 		Option: service.KeyValue{
-			// Que el SO lo reinicie si muere: un agente caído es un activo
-			// mudo, que es indistinguible de un activo apagado.
-			"Restart":         "always",
-			"OnFailure":       "restart",
-			"RestartSec":      10,
-			"StartLimitBurst": 0,
+			"Restart":   "always",  // systemd
+			"OnFailure": "restart", // Windows
 		},
 	}
 }

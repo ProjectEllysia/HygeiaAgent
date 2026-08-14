@@ -1382,6 +1382,30 @@ después (barato y útil para el inventario), y las demás cuando haya demanda.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
+> **Estado: hecho todo salvo la firma.** [`.goreleaser.yaml`](../.goreleaser.yaml) y
+> [`release.yml`](../.github/workflows/release.yml): matriz de cinco plataformas, `checksums.txt`,
+> `.deb`/`.rpm` con el servicio registrado, instalador de Windows adjunto, y release en borrador.
+>
+> **La firma queda pendiente, y no por falta de configuración.** Lo que falta son los
+> certificados: uno de firma de código para Windows (EV, si se quiere evitar SmartScreen desde el
+> primer día) y un "Developer ID Application" de Apple con notarización para macOS. Se decidió
+> **no** dejar un bloque de firma desactivado a la espera de secretos: una configuración que
+> nunca se ha ejecutado y que se salta sola cuando falta el secreto hace creer que los binarios
+> van firmados cuando no lo están. Mientras tanto, las notas de la release lo dicen
+> explícitamente.
+>
+> **Verificado ejecutando la publicación en seco**, no solo leyendo el YAML: se compilan los seis
+> binarios, se generan los cuatro paquetes, y los `.deb`/`.rpm` se instalaron y desinstalaron de
+> verdad en contenedores de Ubuntu y Fedora. De esa prueba salieron tres arreglos que el YAML por
+> sí solo no habría revelado; están en el mensaje del commit.
+>
+> Dos decisiones que esta entrada no anticipaba:
+>
+> - **El tray solo se compila para Windows.** `systray` necesita cgo en macOS y un escritorio con
+>   GTK/D-Bus en Linux; y desde `F-02` no hace falta para dar de alta ni diagnosticar.
+> - **El paquete registra el servicio llamando a `hygeia-agent install`**, en vez de traer una
+>   unidad de systemd propia. Dos definiciones de la misma unidad acabarían divergiendo.
+
 **Situación actual.** Los binarios se compilan a mano. El único empaquetado que existe es
 [`installer/build-installer.ps1`](../installer/build-installer.ps1), un script de PowerShell
 que compila los dos ejecutables de Windows y genera un instalador de Inno Setup — está bien

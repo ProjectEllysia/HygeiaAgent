@@ -10,6 +10,11 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Añadido
 
+- **Publicación automática de binarios** (`F-08`, parcial). Una etiqueta `v*`
+  compila las cinco plataformas del plan, genera `checksums.txt`, paquetes
+  `.deb` y `.rpm` con el servicio ya registrado, el instalador de Windows, y
+  publica todo como una release en borrador. **Falta la firma**, que depende de
+  conseguir los certificados y no de escribir configuración.
 - **Alta y diagnóstico por línea de órdenes** (`F-02`): `hygeia-agent enroll`,
   `reset` e `info`. Hasta ahora, dar de alta un servidor sin escritorio
   obligaba a editar `config.toml` a mano con privilegios y reiniciar el

@@ -38,3 +38,6 @@ config.toml
 
 # Artefactos generados por installer/build-installer.ps1 (binarios, .iss, setup.exe)
 /installer/dist/
+
+# Salida de goreleaser.
+dist/

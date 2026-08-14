@@ -68,6 +68,43 @@ En Windows hay además un instalador de doble clic, que empaqueta ambos binarios
 .\installer\build-installer.ps1
 ```
 
+## Instalar desde una release
+
+Cada etiqueta `v*` publica en GitHub binarios para `linux/amd64`, `linux/arm64`,
+`windows/amd64`, `darwin/amd64` y `darwin/arm64`, paquetes `.deb` y `.rpm`, el instalador de
+Windows y un `checksums.txt`.
+
+**Los binarios todavía no están firmados.** Comprueba la suma antes de instalar, y cuenta con el
+aviso de SmartScreen en Windows:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+En Debian, Ubuntu y derivadas:
+
+```bash
+sudo apt install ./hygeia-agent_<version>_amd64.deb
+```
+
+En Fedora, RHEL y derivadas:
+
+```bash
+sudo dnf install ./hygeia-agent_<version>_amd64.rpm
+```
+
+El paquete deja el binario en `/usr/bin`, la configuración en `/etc/hygeia/config.toml` (con
+permisos `0600`, porque ahí acaba la clave del agente) y registra el servicio. Después queda
+poner la URL del servidor, arrancar y dar de alta:
+
+```bash
+sudo systemctl start hygeia-agent
+echo "$CLAVE_DE_AGENTE" | sudo hygeia-agent enroll
+```
+
+Una actualización conserva `config.toml` —y con él la clave— y reinicia el servicio solo si
+estaba en marcha.
+
 ## Instalar como servicio
 
 Se registra en el gestor de servicios del sistema operativo (systemd, servicio de Windows o
