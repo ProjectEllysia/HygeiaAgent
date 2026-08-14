@@ -8,7 +8,22 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ## [Sin publicar]
 
+### Añadido
+
+- **Inventario de software en Linux** (`F-01`, parcial). El agente lee
+  `/var/lib/dpkg/status` en Debian, Ubuntu y derivadas. Hasta ahora el
+  colector de Linux devolvía una lista vacía, así que un servidor con el
+  agente instalado aparecía en Ellysia como una máquina sin ningún software y
+  su informe de inventario salía en blanco. Quedan pendientes RPM, Flatpak,
+  Snap y macOS.
+
 ### Corregido
+
+- **Un inventario vacío tiraba el heartbeat entero** (`F-01`). Un escaneo sin
+  resultados viajaba como `"software": null`, y el backend declara ese campo
+  obligatorio y no nulo: respondía 422 y el agente descartaba el heartbeat
+  completo. Afectaba a todos los agentes de Linux y macOS, que perdían un
+  heartbeat cada seis horas desde que existe el bucle de escaneo.
 
 - **El heartbeat se descartaba entero cuando un proceso usaba más de un núcleo**
   (`A-01`). El porcentaje de CPU por proceso no se acotaba, y el backend rechaza

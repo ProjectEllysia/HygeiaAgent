@@ -999,6 +999,11 @@ lista con mejor relación entre valor entregado y esfuerzo.
 
 **Impacto en el usuario: Alto · Facilidad: Media**
 
+> **Estado: parcialmente resuelto.** Linux con dpkg (Debian, Ubuntu y derivadas)
+> está implementado en [`inventory_dpkg.go`](../internal/collector/inventory_dpkg.go).
+> Quedan RPM, Flatpak, Snap y macOS. Ver las notas de verificación al final de
+> esta entrada.
+
 **Situación actual.** [`collector/inventory_linux.go`](../internal/collector/inventory_linux.go) y
 [`collector/inventory_darwin.go`](../internal/collector/inventory_darwin.go) son funciones vacías de
 siete líneas que devuelven un inventario vacío sin error. Solo Windows tiene implementación
@@ -1034,6 +1039,34 @@ sistemas operativos soportados.
 - En ambos casos, rellenar los campos que el esquema del servidor ya acepta: `source` (con
   valores como `dpkg`, `rpm`, `brew`, `plist`) y `architecture`, para que el informe pueda
   distinguir el origen de cada entrada.
+
+**Lo aprendido al implementar dpkg.** Tres cosas que no estaban en el análisis original y que
+condicionan lo que queda por hacer:
+
+1. **De los once campos del contrato, el análisis de vulnerabilidades usa dos.** El adaptador a
+   Lybra (`services/inventory_adapter.py`) toma `name` y `version`, y descarta explícitamente
+   todo paquete sin versión: sin ella el motor no puede resolver un CPE, así que no produce ni
+   una sola CVE. `guid`, `installPath`, `sizeBytes` e `installedAt` solo alimentan el informe en
+   PDF. Al implementar RPM, Flatpak, Snap o macOS, **la versión es el campo que decide si el
+   trabajo sirve de algo**; el resto es acabado.
+2. **El fichero de estado de dpkg no lista lo instalado, lista lo conocido.** Incluye paquetes
+   desinstalados sin purgar (`deinstall ok config-files`) y descomprimidos a medio configurar
+   (`install ok unpacked`). Hay que filtrar por el tercer campo de `Status`, que además acierta
+   con `hold ok installed` —un paquete retenido sigue instalado— donde comparar la cadena entera
+   contra `install ok installed` fallaría. Los otros gestores tendrán su equivalente y conviene
+   buscarlo antes de dar por buena su salida.
+3. **`null` no es lista vacía.** El colector de Linux devolvía un slice nulo, que se serializa
+   como `"software": null`, y el backend declara el campo obligatorio y no nulo: respondía 422 y
+   el agente descartaba el heartbeat entero. Cada agente de Linux y macOS perdía un heartbeat
+   cada seis horas desde que existe el bucle de inventario. Está corregido en `capInventory`,
+   que es el punto por el que pasan los escaneos de los tres sistemas.
+
+**Cómo se verificó dpkg.** Las pruebas contra un fichero de ejemplo solo demuestran que el
+analizador coincide con la idea que uno tiene del formato. La comprobación que vale es contra un
+sistema real: sobre un Ubuntu con 620 paquetes registrados, la salida del colector es idéntica
+byte a byte a la de `dpkg-query -W` —619 entradas, con nombre, versión y arquitectura—, y el
+único paquete descartado estaba en `deinstall ok config-files`. Merece la pena repetir esa
+comparación con `rpm -qa` y con `brew list --versions` cuando les toque.
 
 ---
 
