@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -140,11 +139,7 @@ func dpkgMaintainerName(v string) string {
 
 // dpkgInstalledSize convierte el campo Installed-Size, que viene en KiB.
 func dpkgInstalledSize(v string) uint64 {
-	kib, err := strconv.ParseUint(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return kib * 1024
+	return parseUint(v) * 1024
 }
 
 // clampField recorta un valor al máximo que acepta el backend.
