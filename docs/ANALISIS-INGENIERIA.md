@@ -1073,10 +1073,27 @@ condicionan lo que queda por hacer:
 analizador coincide con la idea que uno tiene del formato. La comprobación que vale es contra un
 sistema real: sobre un Ubuntu con 620 paquetes registrados, la salida del colector es idéntica
 byte a byte a la de `dpkg-query -W` —619 entradas, con nombre, versión y arquitectura—, y el
-único paquete descartado estaba en `deinstall ok config-files`. Merece la pena repetir esa
-comparación con `rpm -qa` y con `brew list --versions` cuando les toque. **RPM sigue sin esa
-comprobación**: su analizador solo tiene pruebas unitarias, porque no había a mano ninguna
-máquina ni contenedor con una base de datos de RPM.
+único paquete descartado estaba en `deinstall ok config-files`.
+
+**Cómo se verificó RPM.** La misma idea, en un contenedor de Fedora, y buscando a propósito una
+referencia que no pasara por la misma cadena de consulta que usa el colector —comparar
+`rpm -qa --qf` contra sí mismo no demuestra nada—:
+
+- El recuento coincide con `rpm -qa` en su formato por defecto: 147 y 147.
+- Reconstruyendo `nombre-versión-release.arquitectura` a partir de los campos ya analizados y
+  buscándolo en esa salida por defecto, **casan los 147, sin ninguna discrepancia**. Eso cruza
+  nombre, versión y arquitectura contra una representación que produce el propio `rpm`.
+- Fabricante, tamaño y fecha se contrastaron contra `rpm -qi`, que es otra representación
+  distinta: coinciden al byte y al día. Se confirma de paso que `%{SIZE}` viene en bytes, al
+  revés que el `Installed-Size` de dpkg, que viene en KiB.
+- `bash` sale como `5.3.9` y no como `5.3.9-3.fc44`, que es la decisión de `F-14` aplicada.
+- Las claves del llavero (`gpg-pubkey`), que no tienen ni arquitectura ni fabricante, confirman
+  sobre datos reales que el `(none)` de rpm se traduce a vacío y no se cuela como texto.
+- El camino completo en un sistema RPM es el espejo del de Ubuntu: dpkg ausente sin error, rpm
+  con sus 147 entradas, flatpak y snap ausentes sin error.
+
+No hizo falta corregir nada del colector. Queda por hacer la misma comparación con
+`brew list --versions` cuando se implemente macOS.
 
 ---
 
