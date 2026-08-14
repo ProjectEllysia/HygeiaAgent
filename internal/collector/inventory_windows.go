@@ -9,51 +9,40 @@ import (
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
 
-// uninstallPaths cubre las tres ubicaciones donde Windows registra software instalado [web:68]
+// Windows registra el software desinstalable en una clave "Uninstall" que
+// existe por duplicado —la vista de 64 bits y la de 32 en WOW6432Node— y una
+// vez por cada ámbito de instalación: el de la máquina y el de cada usuario.
+const (
+	uninstallKey64 = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`
+	uninstallKey32 = `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`
+)
 
-var uninstallPaths = []struct {
+type uninstallBranch struct {
 	root registry.Key
 	path string
 	arch string
-}{
-	{
-		registry.LOCAL_MACHINE,
-		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
-		"x64",
-	},
-	{
-		registry.LOCAL_MACHINE,
-		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
-		"x86",
-	},
-	{
-		registry.CURRENT_USER,
-		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
-		"x64",
-	},
 }
 
 func inventory() (payload.Inventory, error) {
-	installedSoftware, err := getInstalledSoftware()
-	if err != nil {
-		return payload.Inventory{}, err
+	software := getInstalledSoftware()
+	if software == nil {
+		software = []payload.Software{}
 	}
-
-	return payload.Inventory{
-		Software: installedSoftware,
-	}, nil
+	return payload.Inventory{Software: software}, nil
 }
 
-func getInstalledSoftware() ([]payload.Software, error) {
+func getInstalledSoftware() []payload.Software {
 	var result []payload.Software
 
-	for _, up := range uninstallPaths {
+	for _, branch := range uninstallBranches() {
 		key, err := registry.OpenKey(
-			up.root,
-			up.path,
+			branch.root,
+			branch.path,
 			registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE,
 		)
 		if err != nil {
+			// Lo normal: no todos los usuarios tienen software propio, y
+			// una rama que no existe no es un fallo.
 			continue
 		}
 
@@ -64,19 +53,86 @@ func getInstalledSoftware() ([]payload.Software, error) {
 		}
 
 		for _, guid := range subKeyNames {
-			sw, ok := readSoftwareEntry(up.root, up.path, guid, up.arch)
-			if ok {
+			if sw, ok := readSoftwareEntry(branch, guid); ok {
 				result = append(result, sw)
 			}
 		}
 	}
 
-	return result, nil
+	return dedupeSoftware(result)
 }
 
-func readSoftwareEntry(root registry.Key, basePath, guid, arch string) (payload.Software, bool) {
-	fullPath := basePath + `\` + guid
-	entryKey, err := registry.OpenKey(root, fullPath, registry.QUERY_VALUE)
+// uninstallBranches enumera todas las claves Uninstall que hay que recorrer.
+//
+// La versión anterior usaba HKEY_CURRENT_USER para el ámbito de usuario, y
+// eso no funcionaba: hygeia-agent corre como servicio bajo LocalSystem, así
+// que HKEY_CURRENT_USER es la rama de LocalSystem —vacía—, no la del usuario
+// sentado delante del equipo. Todo el software instalado "solo para este
+// usuario" (navegadores, clientes de mensajería, herramientas de desarrollo:
+// buena parte de lo que instala alguien sin privilegios de administrador)
+// quedaba fuera del inventario.
+//
+// Se enumera HKEY_USERS, a la que el servicio sí tiene acceso por correr con
+// privilegios elevados.
+//
+// Limitación conocida: HKEY_USERS solo contiene los perfiles CARGADOS, es
+// decir, los de las sesiones abiertas. El software de un usuario que no ha
+// iniciado sesión desde el último arranque no aparece. Cargar su NTUSER.DAT a
+// mano con RegLoadKey sería invasivo —modifica el registro de la máquina para
+// leerlo— y no compensa para un escaneo periódico.
+func uninstallBranches() []uninstallBranch {
+	// La rama WOW6432Node solo existe en sistemas de 64 bits. Su ausencia es
+	// la forma más barata de saber que la clave principal es de 32.
+	sixtyFourBit := keyExists(registry.LOCAL_MACHINE, uninstallKey32)
+
+	nativeArch := "x86"
+	if sixtyFourBit {
+		nativeArch = "x64"
+	}
+
+	branches := []uninstallBranch{
+		{registry.LOCAL_MACHINE, uninstallKey64, nativeArch},
+	}
+	if sixtyFourBit {
+		branches = append(branches, uninstallBranch{registry.LOCAL_MACHINE, uninstallKey32, "x86"})
+	}
+
+	for _, sid := range userSIDs() {
+		branches = append(branches, uninstallBranch{registry.USERS, sid + `\` + uninstallKey64, nativeArch})
+		if sixtyFourBit {
+			branches = append(branches, uninstallBranch{registry.USERS, sid + `\` + uninstallKey32, "x86"})
+		}
+	}
+
+	return branches
+}
+
+func keyExists(root registry.Key, path string) bool {
+	key, err := registry.OpenKey(root, path, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	_ = key.Close()
+	return true
+}
+
+func userSIDs() []string {
+	names, err := registry.USERS.ReadSubKeyNames(-1)
+	if err != nil {
+		return nil
+	}
+
+	var out []string
+	for _, name := range names {
+		if isUserSID(name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func readSoftwareEntry(branch uninstallBranch, guid string) (payload.Software, bool) {
+	entryKey, err := registry.OpenKey(branch.root, branch.path+`\`+guid, registry.QUERY_VALUE)
 	if err != nil {
 		return payload.Software{}, false
 	}
@@ -84,7 +140,7 @@ func readSoftwareEntry(root registry.Key, basePath, guid, arch string) (payload.
 
 	name, _, err := entryKey.GetStringValue("DisplayName")
 	if err != nil || name == "" {
-		// Muchas subclaves son componentes internos sin DisplayName; se descartan [web:68]
+		// Muchas subclaves son componentes internos sin DisplayName.
 		return payload.Software{}, false
 	}
 
@@ -100,24 +156,22 @@ func readSoftwareEntry(root registry.Key, basePath, guid, arch string) (payload.
 		softwareType = "MSI"
 	}
 
-	sw := payload.Software{
-		Name:         name,
+	return payload.Software{
+		Name:         clampField(name, 512),
 		Type:         softwareType,
-		Vendor:       vendor,
-		Version:      version,
-		GUID:         guid,
+		Vendor:       clampField(vendor, 256),
+		Version:      clampField(version, 128),
+		GUID:         clampField(guid, 128),
 		InstalledAt:  parseRegistryDate(installDateRaw),
-		InstallPath:  installPath,
-		Architecture: arch,
-		SizeBytes:    estimatedSize * 1024, // EstimatedSize viene en KB [web:69]
+		InstallPath:  clampField(installPath, 1024),
+		Architecture: branch.arch,
+		SizeBytes:    estimatedSize * 1024, // EstimatedSize viene en KB
 		Status:       "installed",
 		Source:       "registry",
-	}
-
-	return sw, true
+	}, true
 }
 
-// parseRegistryDate convierte el formato YYYYMMDD de InstallDate a time.Time [web:69]
+// parseRegistryDate convierte el formato YYYYMMDD de InstallDate a time.Time.
 func parseRegistryDate(raw string) time.Time {
 	if len(raw) != 8 {
 		return time.Time{}
