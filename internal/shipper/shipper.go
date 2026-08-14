@@ -75,6 +75,16 @@ func NewShipper(serverURL, agentKey string, opts Options) (*Shipper, error) {
 	}, nil
 }
 
+// NewHTTPClient construye el cliente HTTP con los ajustes de red dados.
+//
+// Exportado para el subcomando `doctor`: si doctor montara su propio cliente,
+// podría decir que el proxy y la CA están bien usando una configuración
+// distinta de la que usa el servicio, que es exactamente el fallo que se
+// supone que evita.
+func NewHTTPClient(opts Options) (*http.Client, error) {
+	return newHTTPClient(opts)
+}
+
 func newHTTPClient(opts Options) (*http.Client, error) {
 	// Sin ajustes, no se construye transporte propio: el de Go ya respeta las
 	// variables de entorno de proxy y el almacén del sistema, y clonarlo para
