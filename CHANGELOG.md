@@ -16,6 +16,12 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
   `estimated`, `source`) y el campo `metrics.power`, ausente cuando el agente
   no tiene ninguna fuente de consumo eléctrico que reportar. Primer bloque
   del proyecto de consumo energético; todavía no lo rellena ningún collector.
+- **Interfaz `PowerProvider` y collector `power`** (`P02`): aísla de dónde
+  sale el vatio (RAPL, hwmon, NVML, un modelo de estimación...) detrás de un
+  único método, `Read`, que distingue "sin fuente" (`nil` sin error) de "hay
+  fuente y falló" (error). Todavía no hay ninguna implementación real por
+  sistema operativo — llegan en la fase siguiente —, así que por ahora
+  siempre reporta "sin fuente".
 
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
