@@ -284,6 +284,57 @@ func TestCollectPayloadSurvivesAFailingCollector(t *testing.T) {
 	}
 }
 
+func hasCollector(cs []collector.Collector, name string) bool {
+	for _, c := range cs {
+		if c.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func collectorNames(cs []collector.Collector) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name()
+	}
+	return out
+}
+
+// Sin "collectors" en config.toml, el agente construye TODOS los
+// registrados, incluido "power": una métrica nueva no debe quedar excluida
+// de una instalación por defecto (P05).
+func TestNewCollectorsIncludePowerByDefault(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	if !hasCollector(a.collectors, "power") {
+		t.Errorf("collectors = %v, se esperaba \"power\" incluido por defecto", collectorNames(a.collectors))
+	}
+}
+
+// Una lista explícita en config.toml sigue pudiendo excluir "power" (o
+// cualquier otro collector) sin afectar al resto (P05).
+func TestNewCollectorsExcludePowerWhenNotListed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	body := "serverUrl = \"https://ellysia.example/hygeia\"\ncollectors = [\"cpu\", \"memory\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HYGEIA_DATA_DIR", dir)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	a := New(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+
+	if hasCollector(a.collectors, "power") {
+		t.Errorf("collectors = %v, \"power\" no debería construirse: no está en la lista explícita", collectorNames(a.collectors))
+	}
+	if !hasCollector(a.collectors, "cpu") || !hasCollector(a.collectors, "memory") {
+		t.Errorf("collectors = %v, se esperaban cpu y memory", collectorNames(a.collectors))
+	}
+}
+
 // drainBuffer debe descartar (no reencolar) un payload que el backend
 // rechaza de forma permanente — si no, queda dando vueltas en el buffer sin
 // poder entregarse nunca (bug real: payloads de horas de antigüedad

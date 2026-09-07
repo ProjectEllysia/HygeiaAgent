@@ -28,6 +28,10 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
   fallo. El aviso correspondiente se registra una única vez, no en cada
   ciclo. `PowerCollector` recibe ahora el logger del agente a través de
   `collector.NewRegistry(log)`.
+- **El collector de potencia se puede apagar desde `config.toml`** (`P05`):
+  igual que cualquier otro, listando explícitamente los collectors que se
+  quieren activos. Por defecto, sin la clave `collectors`, el agente activa
+  todos los que conoce — incluido `power`.
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
   desviación de reloj y estado del servicio— con un consejo por cada fallo y

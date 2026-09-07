@@ -157,9 +157,16 @@ func Load(path string) (*Config, error) {
 		path = DefaultPath()
 	}
 	c := &Config{
-		IntervalSec:          15,
-		BufferPath:           filepath.Join(DataDir(), "buffer.jsonl"),
-		Collectors:           []string{"cpu", "memory", "disk", "network", "processes"},
+		IntervalSec: 15,
+		BufferPath:  filepath.Join(DataDir(), "buffer.jsonl"),
+		// Collectors se deja vacío a propósito: collector.Registry.Build(nil)
+		// ya construye todos los registrados, en su orden de alta. Fijar aquí
+		// una copia de esa lista era una TERCERA fuente de verdad además de
+		// NewRegistry y Build (P03) — y, sin nada que las obligara a
+		// coincidir, ya habían divergido: un collector nuevo registrado ahí
+		// se habría quedado excluido para siempre de una instalación por
+		// defecto, exactamente el fallo que P03/P05 corrigen.
+		Collectors:           nil,
 		InventoryIntervalSec: 21600, // 6h: el software instalado cambia poco
 		BufferMaxItems:       defaultBufferMaxItems,
 		InventoryMaxItems:    defaultInventoryMaxItems,

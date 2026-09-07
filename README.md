@@ -426,8 +426,12 @@ antes de desplegar en producción.
 serverUrl   = "https://ellysia.tu-dominio/hygeia"
 agentKey    = "..."          # Opcional: también puede llegar más tarde a través del tray o de `enroll`.
 intervalSec = 15
-collectors  = ["cpu", "memory", "disk", "network", "processes"]
+# collectors  = ["cpu", "memory", "disk", "network", "processes", "power"]
 ```
+
+Sin la clave `collectors` (como en el ejemplo de arriba), el agente activa todos los que
+conoce. Se declara una lista explícita solo para excluir alguno en una máquina concreta —por
+ejemplo `power` en una flota de máquinas virtuales, donde no hay consumo eléctrico que leer.
 
 ## Estructura del repositorio
 

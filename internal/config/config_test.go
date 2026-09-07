@@ -30,8 +30,12 @@ func TestLoad_Defaults(t *testing.T) {
 	if want := filepath.Join(DataDir(), "buffer.jsonl"); cfg.BufferPath != want {
 		t.Errorf("BufferPath = %q, want %q", cfg.BufferPath, want)
 	}
-	if len(cfg.Collectors) != 5 {
-		t.Errorf("len(Collectors) = %d, want %d", len(cfg.Collectors), 5)
+	// Sin "collectors" en el TOML, Config.Collectors se queda vacío: la lista
+	// efectiva de collectors activos la decide collector.Registry (P03/P05),
+	// no esta config. Un test de integración en internal/agent comprueba que
+	// una config vacía construye todos los collectors registrados.
+	if len(cfg.Collectors) != 0 {
+		t.Errorf("len(Collectors) = %d, want 0 (sin collectors en el TOML)", len(cfg.Collectors))
 	}
 	if cfg.InventoryIntervalSec != 21600 {
 		t.Errorf("InventoryIntervalSec = %d, want %d", cfg.InventoryIntervalSec, 21600)
