@@ -14,8 +14,31 @@ func (f *fakeCollector) Collect(context.Context, *payload.Metrics) error { retur
 
 func TestRegistryBuildDefaultsToAllWhenNamesEmpty(t *testing.T) {
 	r := NewRegistry()
-	if got := len(r.Build(nil)); got != 5 {
-		t.Errorf("Build(nil) devolvió %d colectores, se esperaban 5 (todos los registrados por defecto)", got)
+	// Comparamos contra r.order y no contra una lista literal: si este test
+	// tuviera su propia copia de los nombres, sería la TERCERA copia de la
+	// lista, exactamente el fallo que este cambio elimina.
+	got := namesOf(r.Build(nil))
+	want := append([]string(nil), r.order...)
+	if len(got) != len(want) {
+		t.Fatalf("Build(nil) = %v, se esperaba un colector por cada nombre registrado (%v)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Build(nil)[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRegistryBuildDefaultIncludesPower(t *testing.T) {
+	r := NewRegistry()
+	found := false
+	for _, c := range r.Build(nil) {
+		if c.Name() == "power" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Build(nil) no incluyó el collector \"power\": debe estar activo por defecto")
 	}
 }
 

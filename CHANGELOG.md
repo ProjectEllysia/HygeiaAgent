@@ -23,6 +23,15 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
   sistema operativo — llegan en la fase siguiente —, así que por ahora
   siempre reporta "sin fuente".
 
+### Corregido
+
+- **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
+  la derivaba de un literal aparte del que registraba `NewRegistry`, y las
+  dos podían divergir sin que nada lo impidiera — de hecho ya habían
+  divergido de un tercer literal en `config.Load` (ver `P05`). Ahora
+  `Registry` guarda el orden de alta y `Build(nil)` lo deriva de ahí. El
+  collector `power` queda registrado y activo por defecto.
+
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
   desviación de reloj y estado del servicio— con un consejo por cada fallo y
