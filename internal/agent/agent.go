@@ -73,7 +73,7 @@ type Agent struct {
 func New(log *slog.Logger, cfg *config.Config) *Agent {
 	a := &Agent{
 		log:        log,
-		collectors: collector.NewRegistry().Build(cfg.Collectors),
+		collectors: collector.NewRegistry(log).Build(cfg.Collectors),
 		buf:        buffer.NewRingBuffer(cfg.BufferPath, cfg.BufferMaxItems),
 		cfg:        cfg,
 		state:      control.StateUnconfigured,

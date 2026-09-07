@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/collector"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -245,6 +247,40 @@ func TestCollectPayloadAttachesInventoryOnce(t *testing.T) {
 	second := a.collectPayload(context.Background())
 	if second.Inventory != nil {
 		t.Errorf("segundo payload sin escaneo nuevo: Inventory = %+v, se esperaba nil", second.Inventory)
+	}
+}
+
+// fakeFailingCollector simula un collector cuya fuente de datos falla
+// siempre: sirve para comprobar que ningún collector individual le cuesta el
+// heartbeat entero a los demás (P04).
+type fakeFailingCollector struct{ name string }
+
+func (f fakeFailingCollector) Name() string { return f.name }
+func (f fakeFailingCollector) Collect(context.Context, *payload.Metrics) error {
+	return errors.New("fallo simulado")
+}
+
+// El collector de potencia (o cualquier otro) puede fallar sin ninguna
+// fuente de hardware que leer; eso no debe costarle el heartbeat a CPU y
+// memoria, que sí tienen dato. Ver P04 del proyecto de consumo energético.
+func TestCollectPayloadSurvivesAFailingCollector(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	a.collectors = []collector.Collector{
+		collector.NewCPU(),
+		collector.NewMemory(),
+		fakeFailingCollector{name: "power"},
+	}
+
+	p := a.collectPayload(context.Background())
+
+	if p.Metrics.CPU == nil {
+		t.Error("Metrics.CPU = nil: el fallo de otro collector no debería impedir recolectar CPU")
+	}
+	if p.Metrics.Memory == nil {
+		t.Error("Metrics.Memory = nil: el fallo de otro collector no debería impedir recolectar memory")
+	}
+	if p.Metrics.Power != nil {
+		t.Errorf("Metrics.Power = %+v, se esperaba nil tras el fallo del collector de potencia", p.Metrics.Power)
 	}
 }
 

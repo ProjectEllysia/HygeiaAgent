@@ -2,6 +2,8 @@ package collector
 
 import (
 	"context"
+	"log/slog"
+	"sync"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
@@ -19,31 +21,54 @@ type PowerProvider interface {
 }
 
 // PowerCollector adapta un PowerProvider al Collector genérico del agente.
+//
+// La mayoría de las máquinas donde se instale este agente no van a exponer
+// ninguna fuente de potencia utilizable — eso es el caso NORMAL, no el
+// excepcional (un contenedor sin powercap montado, una máquina virtual, un
+// Windows cualquiera) —, así que Collect nunca deja que la ausencia de
+// fuente, ni un fallo de la que hubiera, tumben el heartbeat entero: ese
+// riesgo dejaría mudos a activos que hoy reportan CPU y memoria sin
+// problema, a cambio de una métrica nueva. El aviso correspondiente se
+// registra una única vez (warnOnce), no en cada ciclo: con el intervalo por
+// defecto son cuatro heartbeats por minuto, y repetir la misma línea para
+// siempre llenaría el log sin aportar nada pasado el primer aviso.
 type PowerCollector struct {
 	provider PowerProvider
+	log      *slog.Logger
+
+	warnOnce sync.Once
 }
 
-// NewPower construye el collector con el proveedor de esta plataforma.
+// NewPower construye el collector con el proveedor de esta plataforma. log
+// es el logger del agente, para el aviso único de "sin fuente" descrito
+// arriba.
 //
 // Esta fase (Fase 0 del proyecto de consumo energético) no lee ningún sensor
 // todavía: newPowerProvider devuelve un proveedor que siempre dice "sin
 // fuente". Los proveedores reales de Linux y Windows llegan en la Fase 1.
-func NewPower() Collector {
-	return &PowerCollector{provider: newPowerProvider()}
+func NewPower(log *slog.Logger) Collector {
+	return &PowerCollector{provider: newPowerProvider(), log: log}
 }
 
 func (c *PowerCollector) Name() string { return "power" }
 
 func (c *PowerCollector) Collect(ctx context.Context, m *payload.Metrics) error {
 	pw, err := c.provider.Read(ctx)
-	if err != nil {
-		return err
-	}
-	if pw == nil {
+	switch {
+	case err != nil:
+		c.warnOnce.Do(func() {
+			c.log.Warn("consumo eléctrico no disponible: la fuente de potencia falló", "err", err)
+		})
+		return nil
+	case pw == nil:
+		c.warnOnce.Do(func() {
+			c.log.Info("esta máquina no expone ninguna fuente de consumo eléctrico compatible")
+		})
+		return nil
+	default:
+		m.Power = pw
 		return nil
 	}
-	m.Power = pw
-	return nil
 }
 
 // noopPowerProvider es el proveedor por defecto mientras no exista ninguna

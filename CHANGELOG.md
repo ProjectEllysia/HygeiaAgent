@@ -22,16 +22,12 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
   fuente y falló" (error). Todavía no hay ninguna implementación real por
   sistema operativo — llegan en la fase siguiente —, así que por ahora
   siempre reporta "sin fuente".
-
-### Corregido
-
-- **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
-  la derivaba de un literal aparte del que registraba `NewRegistry`, y las
-  dos podían divergir sin que nada lo impidiera — de hecho ya habían
-  divergido de un tercer literal en `config.Load` (ver `P05`). Ahora
-  `Registry` guarda el orden de alta y `Build(nil)` lo deriva de ahí. El
-  collector `power` queda registrado y activo por defecto.
-
+- **El collector de potencia nunca rompe el heartbeat** (`P04`): sin fuente
+  de consumo eléctrico, o con una fuente que falla, `power` devuelve el
+  payload intacto (conserva `cpu`, `memory`, etc.) en vez de propagar el
+  fallo. El aviso correspondiente se registra una única vez, no en cada
+  ciclo. `PowerCollector` recibe ahora el logger del agente a través de
+  `collector.NewRegistry(log)`.
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
   desviación de reloj y estado del servicio— con un consejo por cada fallo y
@@ -66,6 +62,12 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ### Corregido
 
+- **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
+  la derivaba de un literal aparte del que registraba `NewRegistry`, y las
+  dos podían divergir sin que nada lo impidiera — de hecho ya habían
+  divergido de un tercer literal en `config.Load` (ver `P05`). Ahora
+  `Registry` guarda el orden de alta y `Build(nil)` lo deriva de ahí. El
+  collector `power` queda registrado y activo por defecto.
 - **Una clave revocada dejaba el agente girando en vacío** (`F-03`). Tras rotar
   la clave en Ellysia, el agente reintentaba cuatro veces por ciclo contra un
   401 y llenaba el buffer con heartbeats que ya nadie iba a aceptar, mientras

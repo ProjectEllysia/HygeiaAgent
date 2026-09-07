@@ -2,6 +2,8 @@ package collector
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -12,8 +14,14 @@ type fakeCollector struct{ name string }
 func (f *fakeCollector) Name() string                                    { return f.name }
 func (f *fakeCollector) Collect(context.Context, *payload.Metrics) error { return nil }
 
+// discardLogger evita ensuciar la salida de los tests con los avisos que
+// pueda emitir el collector "power" al no encontrar fuente.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func TestRegistryBuildDefaultsToAllWhenNamesEmpty(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(discardLogger())
 	// Comparamos contra r.order y no contra una lista literal: si este test
 	// tuviera su propia copia de los nombres, sería la TERCERA copia de la
 	// lista, exactamente el fallo que este cambio elimina.
@@ -30,7 +38,7 @@ func TestRegistryBuildDefaultsToAllWhenNamesEmpty(t *testing.T) {
 }
 
 func TestRegistryBuildDefaultIncludesPower(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(discardLogger())
 	found := false
 	for _, c := range r.Build(nil) {
 		if c.Name() == "power" {
@@ -43,7 +51,7 @@ func TestRegistryBuildDefaultIncludesPower(t *testing.T) {
 }
 
 func TestRegistryBuildFiltersUnknownNames(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(discardLogger())
 	cs := r.Build([]string{"cpu", "un-typo-que-no-existe", "memory"})
 	if got := len(cs); got != 2 {
 		t.Fatalf("Build con un nombre desconocido devolvió %d, se esperaban 2 (cpu, memory)", got)

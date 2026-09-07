@@ -1,8 +1,11 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -19,7 +22,7 @@ func (f fakePowerProvider) Read(ctx context.Context) (*payload.PowerMetrics, err
 }
 
 func TestPowerCollectorPositiveValueReachesPayload(t *testing.T) {
-	c := &PowerCollector{provider: fakePowerProvider{metrics: &payload.PowerMetrics{Watts: 42.5, Source: "rapl"}}}
+	c := &PowerCollector{provider: fakePowerProvider{metrics: &payload.PowerMetrics{Watts: 42.5, Source: "rapl"}}, log: discardLogger()}
 	var m payload.Metrics
 	if err := c.Collect(context.Background(), &m); err != nil {
 		t.Fatalf("Collect() = %v", err)
@@ -30,7 +33,7 @@ func TestPowerCollectorPositiveValueReachesPayload(t *testing.T) {
 }
 
 func TestPowerCollectorZeroWattsIsNotDiscarded(t *testing.T) {
-	c := &PowerCollector{provider: fakePowerProvider{metrics: &payload.PowerMetrics{Watts: 0, Source: "rapl"}}}
+	c := &PowerCollector{provider: fakePowerProvider{metrics: &payload.PowerMetrics{Watts: 0, Source: "rapl"}}, log: discardLogger()}
 	var m payload.Metrics
 	if err := c.Collect(context.Background(), &m); err != nil {
 		t.Fatalf("Collect() = %v", err)
@@ -44,7 +47,7 @@ func TestPowerCollectorZeroWattsIsNotDiscarded(t *testing.T) {
 }
 
 func TestPowerCollectorNilWithoutErrorOmitsPower(t *testing.T) {
-	c := &PowerCollector{provider: fakePowerProvider{metrics: nil, err: nil}}
+	c := &PowerCollector{provider: fakePowerProvider{metrics: nil, err: nil}, log: discardLogger()}
 	var m payload.Metrics
 	if err := c.Collect(context.Background(), &m); err != nil {
 		t.Fatalf("Collect() = %v, se esperaba nil (sin fuente no es un fallo)", err)
@@ -54,20 +57,55 @@ func TestPowerCollectorNilWithoutErrorOmitsPower(t *testing.T) {
 	}
 }
 
-func TestPowerCollectorProviderErrorPropagates(t *testing.T) {
-	wantErr := errors.New("fallo leyendo el sensor")
-	c := &PowerCollector{provider: fakePowerProvider{err: wantErr}}
+// TestPowerCollectorProviderErrorNeverBreaksTheHeartbeat es el criterio de
+// cierre de P04: un proveedor que falla no debe propagar el error (eso
+// descartaría el heartbeat entero en el peor momento posible, cuando más
+// falta hace seguir reportando CPU y memoria).
+func TestPowerCollectorProviderErrorNeverBreaksTheHeartbeat(t *testing.T) {
+	c := &PowerCollector{provider: fakePowerProvider{err: errors.New("fallo leyendo el sensor")}, log: discardLogger()}
 	var m payload.Metrics
-	if err := c.Collect(context.Background(), &m); !errors.Is(err, wantErr) {
-		t.Errorf("Collect() = %v, want %v", err, wantErr)
+	if err := c.Collect(context.Background(), &m); err != nil {
+		t.Errorf("Collect() = %v, un fallo del proveedor no debe romper el heartbeat", err)
 	}
 	if m.Power != nil {
 		t.Errorf("Power = %+v, se esperaba nil tras un error del proveedor", m.Power)
 	}
 }
 
+func TestPowerCollectorWarnsOnlyOnceAcrossCycles(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	c := &PowerCollector{provider: fakePowerProvider{err: errors.New("fallo leyendo el sensor")}, log: log}
+
+	for range 5 {
+		if err := c.Collect(context.Background(), &payload.Metrics{}); err != nil {
+			t.Fatalf("Collect() = %v", err)
+		}
+	}
+
+	if got := strings.Count(buf.String(), "consumo eléctrico no disponible"); got != 1 {
+		t.Errorf("el aviso apareció %d veces en 5 ciclos, se esperaba exactamente 1: %s", got, buf.String())
+	}
+}
+
+func TestPowerCollectorNoSourceWarnsOnlyOnceAcrossCycles(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	c := &PowerCollector{provider: fakePowerProvider{}, log: log}
+
+	for range 5 {
+		if err := c.Collect(context.Background(), &payload.Metrics{}); err != nil {
+			t.Fatalf("Collect() = %v", err)
+		}
+	}
+
+	if got := strings.Count(buf.String(), "no expone ninguna fuente"); got != 1 {
+		t.Errorf("el aviso apareció %d veces en 5 ciclos, se esperaba exactamente 1: %s", got, buf.String())
+	}
+}
+
 func TestPowerCollectorName(t *testing.T) {
-	if got := NewPower().Name(); got != "power" {
+	if got := NewPower(discardLogger()).Name(); got != "power" {
 		t.Errorf("Name() = %q, want %q", got, "power")
 	}
 }

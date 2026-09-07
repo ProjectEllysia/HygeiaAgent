@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
 )
@@ -25,14 +26,18 @@ type Registry struct {
 	order     []string
 }
 
-func NewRegistry() *Registry {
+// NewRegistry construye el registro de colectores. log es el logger del
+// agente: el collector "power" lo necesita para avisar UNA SOLA VEZ cuando
+// esta máquina no tiene ninguna fuente de potencia, en vez de repetirlo en
+// cada heartbeat (README/P04).
+func NewRegistry(log *slog.Logger) *Registry {
 	r := &Registry{factories: make(map[string]func() Collector)}
 	r.Register("cpu", NewCPU)
 	r.Register("memory", NewMemory)
 	r.Register("disk", NewDisk)
 	r.Register("network", NewNetwork)
 	r.Register("processes", NewProcesses)
-	r.Register("power", NewPower)
+	r.Register("power", func() Collector { return NewPower(log) })
 	return r
 }
 
