@@ -74,6 +74,37 @@ func TestPayloadJSON_HostInfo(t *testing.T) {
 	}
 }
 
+func TestHostInfoJSON_OmitsVirtualizationFieldsWhenEmpty(t *testing.T) {
+	h := HostInfo{Hostname: "bare-metal-01", OS: "linux"}
+	data, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if strings.Contains(string(data), "virtualization") {
+		t.Errorf("esperaba los campos de virtualización ausentes en una máquina física, got %s", data)
+	}
+}
+
+func TestHostInfoJSON_VirtualizationFieldsRoundTrip(t *testing.T) {
+	h := HostInfo{
+		Hostname:             "vm-01",
+		VirtualizationSystem: "kvm",
+		VirtualizationRole:   "guest",
+	}
+	data, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+
+	var got HostInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	if got.VirtualizationSystem != "kvm" || got.VirtualizationRole != "guest" {
+		t.Errorf("HostInfo = %+v", got)
+	}
+}
+
 func TestMetricsJSON_CPUMetrics(t *testing.T) {
 	m := Metrics{
 		CPU: &CPUMetrics{

@@ -4,6 +4,8 @@ import (
 	"os"
 	"runtime"
 	"testing"
+
+	gpshost "github.com/shirou/gopsutil/v4/host"
 )
 
 func TestHost_ReturnsHostname(t *testing.T) {
@@ -37,5 +39,24 @@ func TestHost_KernelIsPopulated(t *testing.T) {
 	h := Host()
 	if h.Kernel == "" {
 		t.Error("Kernel = \"\", se esperaba la versión de kernel/SO (gopsutil.host.Info)")
+	}
+}
+
+// VirtualizationSystem y VirtualizationRole vienen de gopsutil.host.Info(),
+// igual que Kernel y UptimeSec. A diferencia de esos dos, en una máquina
+// física normal salen vacíos (no hay hipervisor que reportar), así que no
+// podemos afirmar que tengan un valor concreto — solo que Host() propaga
+// exactamente lo que gopsutil dice, sea lo que sea (P29).
+func TestHost_VirtualizationFieldsMatchGopsutil(t *testing.T) {
+	h := Host()
+	info, err := gpshost.Info()
+	if err != nil {
+		t.Skipf("gopsutil host.Info() falló: %v", err)
+	}
+	if h.VirtualizationSystem != info.VirtualizationSystem {
+		t.Errorf("VirtualizationSystem = %q, want %q", h.VirtualizationSystem, info.VirtualizationSystem)
+	}
+	if h.VirtualizationRole != info.VirtualizationRole {
+		t.Errorf("VirtualizationRole = %q, want %q", h.VirtualizationRole, info.VirtualizationRole)
 	}
 }

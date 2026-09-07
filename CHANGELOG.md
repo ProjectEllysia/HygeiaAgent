@@ -32,6 +32,13 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
   igual que cualquier otro, listando explícitamente los collectors que se
   quieren activos. Por defecto, sin la clave `collectors`, el agente activa
   todos los que conoce — incluido `power`.
+- **`virtualizationSystem` y `virtualizationRole` en `host`** (`P29`, parte
+  de agente): permiten al backend distinguir, más adelante, "esta máquina no
+  tiene sensores de potencia" de "esta máquina es un invitado, y su consumo
+  lo mide el equipo físico que la hospeda". Salen de `gopsutil.host.Info()`,
+  la misma llamada que ya rellenaba `kernel` y `uptimeSec`. La parte de
+  servidor (esquema, migración, mensaje en la interfaz) queda fuera de este
+  repositorio.
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
   desviación de reloj y estado del servicio— con un consejo por cada fallo y

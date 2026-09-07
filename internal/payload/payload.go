@@ -27,6 +27,15 @@ type HostInfo struct {
 	OS        string `json:"os"`
 	Kernel    string `json:"kernel"`
 	UptimeSec uint64 `json:"uptimeSec"`
+	// VirtualizationSystem (kvm, vmware, hyperv, xen, docker...) y
+	// VirtualizationRole ("guest" o "host") permiten al backend distinguir
+	// "esta máquina no tiene sensores de potencia" de "esta máquina es un
+	// invitado, y su consumo eléctrico lo mide el equipo físico que la
+	// hospeda" (P29): un invitado no tiene registros de energía que leer, y
+	// eso no es un defecto de su hardware. Ambos se omiten cuando gopsutil no
+	// los detecta, en vez de enviar una cadena vacía.
+	VirtualizationSystem string `json:"virtualizationSystem,omitempty"`
+	VirtualizationRole   string `json:"virtualizationRole,omitempty"`
 }
 
 type Inventory struct {

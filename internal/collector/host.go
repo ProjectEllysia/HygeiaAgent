@@ -21,6 +21,8 @@ func Host() payload.HostInfo {
 	if info, err := gpshost.Info(); err == nil {
 		h.Kernel = info.KernelVersion
 		h.UptimeSec = info.Uptime
+		h.VirtualizationSystem = info.VirtualizationSystem
+		h.VirtualizationRole = info.VirtualizationRole
 	} else if kv, err := gpshost.KernelVersion(); err == nil {
 		h.Kernel = kv
 	}
