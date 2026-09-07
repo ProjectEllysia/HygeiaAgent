@@ -4,11 +4,18 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Las versiones publicadas se anotan en [`VERSION.txt`](VERSION.txt).
 
 Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
-[`docs/ANALISIS-INGENIERIA.md`](docs/ANALISIS-INGENIERIA.md).
+[`docs/ANALISIS-INGENIERIA.md`](docs/ANALISIS-INGENIERIA.md). Los `P-nn`
+remiten al proyecto [Hygeia — Consumo
+energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ## [Sin publicar]
 
 ### Añadido
+
+- **Contrato de potencia** (`P01`): `payload.PowerMetrics` (`watts`,
+  `estimated`, `source`) y el campo `metrics.power`, ausente cuando el agente
+  no tiene ninguna fuente de consumo eléctrico que reportar. Primer bloque
+  del proyecto de consumo energético; todavía no lo rellena ningún collector.
 
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,

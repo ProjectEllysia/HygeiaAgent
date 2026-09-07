@@ -135,6 +135,39 @@ func TestProcessInfoJSON(t *testing.T) {
 	}
 }
 
+func TestMetricsJSON_NilPowerOmitsKey(t *testing.T) {
+	m := Metrics{CPU: &CPUMetrics{UsagePct: 10}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if strings.Contains(string(data), `"power"`) {
+		t.Errorf("esperaba que power estuviera ausente sin fuente de potencia, got %s", data)
+	}
+}
+
+func TestMetricsJSON_ZeroWattsPowerIsPresent(t *testing.T) {
+	m := Metrics{Power: &PowerMetrics{Watts: 0, Estimated: false, Source: "rapl"}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if !strings.Contains(string(data), `"power":{"watts":0,"estimated":false,"source":"rapl"}`) {
+		t.Errorf("esperaba power con watts:0 presente (distinto de ausente), got %s", data)
+	}
+
+	var got Metrics
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	if got.Power == nil {
+		t.Fatal("Power = nil tras round-trip, se esperaba un valor con watts:0")
+	}
+	if got.Power.Watts != 0 || got.Power.Source != "rapl" {
+		t.Errorf("Power = %+v", got.Power)
+	}
+}
+
 func TestLocalAlertJSON(t *testing.T) {
 	a := LocalAlert{
 		Type:    "high_cpu",

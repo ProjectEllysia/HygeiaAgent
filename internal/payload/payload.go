@@ -55,6 +55,27 @@ type Metrics struct {
 	Disk      []DiskMetrics    `json:"disk,omitempty"`
 	Network   []NetworkMetrics `json:"network,omitempty"`
 	Processes *ProcessMetrics  `json:"processes,omitempty"`
+	Power     *PowerMetrics    `json:"power,omitempty"`
+}
+
+// PowerMetrics es el consumo eléctrico del host. Watts es potencia
+// instantánea o su mejor aproximación; Estimated distingue una lectura de
+// sensor de una construcción nuestra; Source dice de dónde salió, para que
+// un número raro se pueda auditar sin abrir el agente.
+//
+// El puntero en Metrics.Power no es cosmético: permite distinguir "esta
+// máquina no tiene ninguna fuente de potencia" (campo ausente) de "hay
+// fuente y marca cero" (watts: 0), que es la distinción sobre la que se
+// apoya todo el proyecto de consumo energético.
+//
+// Source es una cadena libre y no un enum a propósito: los valores previstos
+// (rapl, hwmon, nvidia, amd_gpu, psu, model, y combinaciones como
+// rapl+nvidia) crecerán según aparezcan proveedores nuevos, y encerrarlos en
+// un tipo obligaría a versionar el contrato cada vez.
+type PowerMetrics struct {
+	Watts     float64 `json:"watts"`
+	Estimated bool    `json:"estimated"`
+	Source    string  `json:"source"`
 }
 
 type CPUMetrics struct {
