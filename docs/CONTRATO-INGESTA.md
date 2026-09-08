@@ -204,14 +204,17 @@ El esquema del backend rechaza `null` en un campo de lista.
 |---|---|---|---|
 | `watts` | decimal | Sí (si el bloque existe) | Potencia instantánea o su mejor aproximación. `0` es un valor válido y distinto de que el bloque esté ausente. |
 | `estimated` | booleano | Sí | Distingue una lectura de sensor (`false`) de una construcción nuestra, por ejemplo un modelo de utilización en Windows (`true`). |
-| `source` | cadena | Sí | Cadena libre: `rapl`, `hwmon`, `nvidia`, `amd_gpu`, `psu`, `model`, o combinaciones como `rapl+nvidia`. No es un catálogo cerrado a propósito: una fuente nueva no debería exigir versionar el contrato. |
+| `source` | cadena | Sí | Cadena libre: `rapl`, `hwmon:<driver>`, `nvidia`, `amd_gpu`, `model`, `model+nvidia`, o combinaciones como `rapl+nvidia`. No es un catálogo cerrado a propósito: una fuente nueva no debería exigir versionar el contrato. |
 
 El bloque entero está **ausente** cuando esta máquina no tiene ninguna fuente
-de potencia que reportar — esa es hoy la situación normal, no la excepcional:
-la Fase 0 de este proyecto solo fija el contrato y la maquinaria de
-recolección; los proveedores reales de Linux y Windows llegan en la fase
-siguiente. Un heartbeat sin `power` conserva `cpu`, `memory` y el resto de
-métricas con normalidad.
+de potencia que reportar — eso sigue siendo el caso normal para buena parte
+del parque (una máquina virtual, un contenedor, un equipo sin sensores
+compatibles). La Fase 1 de este proyecto rellenó los proveedores reales: RAPL
+y `hwmon` en Linux, GPU NVIDIA (`nvidia-smi`) y AMD (`hwmon` del dispositivo)
+en ambos sistemas, y un modelo de estimación por utilización en Windows —
+detalle completo, por plataforma y con ejemplos de payload, en el
+[README del agente](../README.md#consumo-eléctrico). Un heartbeat sin `power`
+conserva `cpu`, `memory` y el resto de métricas con normalidad.
 
 ### `inventory.software` — lista, máximo 2000
 
@@ -340,6 +343,6 @@ una ventana simétrica corta, ese buffer era decorativo. Ver A-02 del análisis.
 
 | Versión | Cambio |
 |---|---|
-| **1.2** | `metrics.power` (`watts`, `estimated`, `source`), ausente sin fuente de potencia. `host.virtualizationSystem` y `host.virtualizationRole`, para que el backend distinga "sin sensores" de "es una máquina virtual" (P29). Fase 0 del proyecto de consumo energético: todavía no hay ninguna implementación real por sistema operativo. |
+| **1.2** | `metrics.power` (`watts`, `estimated`, `source`), ausente sin fuente de potencia. `host.virtualizationSystem` y `host.virtualizationRole`, para que el backend distinga "sin sensores" de "es una máquina virtual" (P29). Fases 0 y 1 del proyecto de consumo energético: el contrato y, ahora, los proveedores reales de Linux (RAPL, hwmon, GPU) y Windows (modelo por utilización). |
 | **1.1** | `cpuPct` de proceso pasa a ser porcentaje de la capacidad total del equipo, normalizado por número de núcleos (A-01). Ventana de reloj asimétrica, con `maxBackfillSec` nuevo (A-02). El `429` expone `min_interval_sec` (A-03). Documentado `inventory`, que existía sin estar en el contrato escrito. |
 | **1.0** | Contrato inicial: métricas de CPU, memoria, disco, red y procesos, más `nextIntervalSec` en la respuesta. |

@@ -433,6 +433,103 @@ Sin la clave `collectors` (como en el ejemplo de arriba), el agente activa todos
 conoce. Se declara una lista explícita solo para excluir alguno en una máquina concreta —por
 ejemplo `power` en una flota de máquinas virtuales, donde no hay consumo eléctrico que leer.
 
+## Consumo eléctrico
+
+El collector `power` reporta el consumo eléctrico del host, en vatios (bloque `metrics.power`
+del contrato de ingesta: `watts`, `estimated`, `source`). Es la única métrica del agente cuya
+obtención cambia radicalmente según el sistema operativo y el hardware concreto, así que esta
+sección documenta las tres cosas que no se pueden adivinar leyendo el código de un solo
+proveedor: qué fuentes existen, en qué orden se combinan, y qué significa `estimated`.
+
+### Fuentes por plataforma
+
+**Linux**, evaluadas en este orden de precedencia:
+
+1. **Un sensor de sistema completo**, vía `hwmon`, cuando el driver es uno reconocido
+   explícitamente como fuente de alimentación o controlador de gestión de la placa (hoy:
+   `pmbus`, `ibmpowernv`, `corsair-psu`). Si aparece, se usa **solo**: ya incluye a la máquina
+   entera, y sumarle cualquier otra fuente contaría dos veces. Sale con `estimated: false` y
+   `source: "hwmon:<driver>"`.
+2. Si no hay ninguno, se **suman** las fuentes por componente que no se solapan entre sí:
+   - **RAPL** (`intel-rapl:N` en `/sys/class/powercap`): el package de CPU. El kernel no expone
+     vatios, sino energía acumulada (`energy_uj`); el proveedor deriva la potencia contra la
+     lectura anterior y corrige el desbordamiento del contador con `max_energy_range_uj`. Sin
+     privilegio de root no es legible (`energy_uj` es `0400` desde Linux 5.10, CVE-2020-8694,
+     PLATYPUS) y se degrada en silencio — `hygeia-agent doctor` dice si es eso o si simplemente no
+     hay RAPL en la máquina.
+   - **GPU NVIDIA**, vía `nvidia-smi` (sin enlazar contra NVML: evita cgo y mantiene la
+     compilación cruzada).
+   - **GPU AMD**, vía el `hwmon` colgado del propio dispositivo `drm` (`power1_average`).
+
+   El resultado sale con `estimated: true` y `source` enumerando exactamente los sumandos
+   (`rapl`, `rapl+nvidia`, `nvidia+amd_gpu`...): una cifra rara se audita leyendo ese campo, no
+   reproduciendo el hardware de la máquina.
+3. Si no hay ninguna fuente, el bloque `power` no viaja. Es el caso normal en una máquina
+   virtual, un contenedor sin `powercap` montado, o un equipo sin sensores compatibles.
+
+**Windows** no tiene ninguna interfaz de usuario para leer potencia de CPU (ver más abajo el
+porqué), así que estima por modelo de utilización: una potencia base en reposo más una fracción
+del TDP de la familia de CPU detectada, proporcional a su uso. Sale siempre con
+`estimated: true` y `source: "model"` (o `"model+nvidia"` si además hay una GPU NVIDIA, que sí se
+mide de verdad vía `nvidia-smi` y se suma). Una CPU que no está en la tabla de TDP no estima con
+un número inventado: el bloque `power` no viaja.
+
+**macOS** no tiene todavía ningún proveedor implementado; el bloque `power` nunca viaja.
+
+En cualquier plataforma, si esta máquina es una **máquina virtual** (`host.virtualizationRole
+= "guest"`), no hay registros de energía que leer — no se virtualizan — y eso no es un fallo del
+agente: es el backend quien, con esa información, distingue "sin sensores" de "es un invitado,
+lo mide el equipo que lo hospeda" (P29).
+
+### Ejemplos de payload
+
+```jsonc
+// Con una fuente real (Linux, solo RAPL)
+"power": { "watts": 42.5, "estimated": true, "source": "rapl" }
+
+// Con una fuente de sistema completo (Linux, PSU reconocida por hwmon)
+"power": { "watts": 187.0, "estimated": false, "source": "hwmon:pmbus" }
+
+// Estimación por modelo (Windows, sin GPU NVIDIA)
+"power": { "watts": 28.5, "estimated": true, "source": "model" }
+
+// Sin ninguna fuente (máquina virtual, contenedor, macOS, CPU no catalogada...)
+// El bloque "power" está simplemente ausente del heartbeat.
+```
+
+### Desactivarlo
+
+`power` está activo por defecto, junto con el resto de colectores (ver [Configuración](#configuración) más
+arriba). Se desactiva en una máquina concreta declarando una lista explícita de `collectors` que
+lo omita — típicamente una flota de máquinas virtuales, donde no hay consumo eléctrico que leer y
+el intento de leerlo (`nvidia-smi`, ficheros de `sysfs`) es coste sin ningún beneficio.
+
+### Por qué Windows no mide potencia de CPU
+
+Los contadores de energía de la CPU viven en los MSR (*Model-Specific Registers*), accesibles
+solo desde modo kernel; no existe en Windows una interfaz de usuario equivalente a `powercap` de
+Linux. Las herramientas que sí lo consiguen (LibreHardwareMonitor, HWiNFO, Intel PCM) lo hacen
+instalando un driver de kernel, típicamente WinRing0, que concede lectura arbitraria de MSR y de
+puertos de E/S. Ese driver exige privilegios de administrador para instalarse, lo marcan
+antivirus y EDR por lo que hace, y ha figurado en la lista de drivers vulnerables bloqueados por
+Microsoft como vector de escalada de privilegios BYOVD (CVE-2020-14979).
+
+Para un agente cuya razón de ser es la monitorización de seguridad, instalar un driver así en
+cada host del parque no es una funcionalidad: es abrir una vía de ataque a cambio de una gráfica.
+Se descarta.
+
+Lo que queda sin driver es limitado y se ha evaluado: `Win32_Battery.DischargeRate` da milivatios
+reales pero solo en portátiles funcionando a batería (nunca en el caso que interesa, un equipo
+conectado a la corriente); el contador de rendimiento `\Power Meter(*)\Power` funciona pero
+requiere un dispositivo ACPI de medición de energía que solo traen los Surface y algunos
+servidores; `nvidia-smi` funciona, pero solo cubre la GPU — y de hecho se usa. De ahí el modelo
+de estimación por utilización descrito arriba, siempre declarado como tal (`estimated: true`,
+`source: "model"`).
+
+**Esta decisión se reabriría** si Microsoft expusiera una interfaz de usuario para energía de
+CPU, o si apareciera un driver firmado y mantenido cuyo alcance estuviera acotado a leer
+contadores de energía y nada más (no lectura arbitraria de MSR).
+
 ## Estructura del repositorio
 
 ```
