@@ -41,13 +41,11 @@ type PowerCollector struct {
 
 // NewPower construye el collector con el proveedor de esta plataforma. log
 // es el logger del agente, para el aviso único de "sin fuente" descrito
-// arriba.
-//
-// Esta fase (Fase 0 del proyecto de consumo energético) no lee ningún sensor
-// todavía: newPowerProvider devuelve un proveedor que siempre dice "sin
-// fuente". Los proveedores reales de Linux y Windows llegan en la Fase 1.
+// arriba, y se pasa también al proveedor: cada fuente real (RAPL, hwmon,
+// GPU...) tiene su propia razón para no encontrar nada, y necesita el mismo
+// logger para avisar UNA vez de la suya (Fase 1, P08).
 func NewPower(log *slog.Logger) Collector {
-	return &PowerCollector{provider: newPowerProvider(), log: log}
+	return &PowerCollector{provider: newPowerProvider(log), log: log}
 }
 
 func (c *PowerCollector) Name() string { return "power" }
@@ -71,12 +69,28 @@ func (c *PowerCollector) Collect(ctx context.Context, m *payload.Metrics) error 
 	}
 }
 
-// noopPowerProvider es el proveedor por defecto mientras no exista ninguna
-// implementación específica de sistema operativo: nunca encuentra fuente.
-type noopPowerProvider struct{}
-
-func (noopPowerProvider) Read(ctx context.Context) (*payload.PowerMetrics, error) {
-	return nil, nil
+// newPowerProvider construye el proveedor real de esta plataforma. Vive en
+// power_linux.go, power_windows.go y power_other.go, uno por cada valor de
+// runtime.GOOS que el nombre de fichero selecciona en tiempo de compilación
+// (el mismo mecanismo que ya usa el inventario: inventory_linux.go,
+// inventory_windows.go, inventory_darwin.go).
+//
+// PowerDiagnostic y DiagnosePower, usados por `doctor` (P08), siguen el mismo
+// reparto por fichero.
+type PowerDiagnostic struct {
+	// Available indica si esta máquina tiene, ahora mismo, una fuente de
+	// potencia utilizable — no si algún día podría tenerla.
+	Available bool
+	// Detail es una línea legible sobre qué se encontró (o no).
+	Detail string
+	// Hint solo se rellena cuando hay algo que hacer al respecto (falta un
+	// privilegio, falta un binario...). Vacío en el caso normal de una
+	// máquina sin sensores compatibles: ahí no hay ninguna acción que sugerir.
+	Hint string
 }
 
-func newPowerProvider() PowerProvider { return noopPowerProvider{} }
+// DiagnosePower resume qué fuente de potencia ve el agente en esta máquina y,
+// si no ve ninguna, por qué. `doctor` lo usa para que la ausencia de
+// electricidad en el heartbeat sea diagnosticable sin leer el código
+// (Fase 1, P08): decir "no hay power" no basta, hace falta decir POR QUÉ.
+func DiagnosePower() PowerDiagnostic { return diagnosePower() }

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/collector"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/shipper"
@@ -92,7 +93,7 @@ func runDoctor() error {
 		)
 		checks = append(checks, checkConnectivity(cfg)...)
 	}
-	checks = append(checks, checkService())
+	checks = append(checks, checkPower(), checkService())
 
 	return report(checks)
 }
@@ -482,6 +483,30 @@ func clockCheck(name, dateHeader string, now time.Time) check {
 				"Sincroniza el reloj del sistema (NTP).")
 	}
 	return warn(name, detalle, "Todavía dentro de la ventana que acepta el servidor, pero conviene sincronizarlo.")
+}
+
+// -------------------------------------------------------------------------
+// Potencia
+// -------------------------------------------------------------------------
+
+// checkPower dice si esta máquina tiene una fuente de consumo eléctrico
+// utilizable y, si no, por qué (P08): la mayoría de las máquinas no la
+// tienen, y eso NUNCA es un fallo aquí, solo información. Cuando sí hay algo
+// que hacer (falta el privilegio de root para leer RAPL) sale como aviso con
+// el consejo concreto, en vez de un simple "no disponible" que obligaría a
+// leer el código para saber por qué.
+func checkPower() check {
+	const name = "Consumo eléctrico"
+
+	d := collector.DiagnosePower()
+	if d.Available {
+		return ok(name, d.Detail)
+	}
+	hint := d.Hint
+	if hint == "" {
+		hint = "Es el caso normal en máquinas virtuales, contenedores o equipos sin sensores compatibles."
+	}
+	return warn(name, d.Detail, hint)
 }
 
 // -------------------------------------------------------------------------
