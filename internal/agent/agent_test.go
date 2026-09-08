@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/collector"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/config"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/control"
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -245,6 +247,91 @@ func TestCollectPayloadAttachesInventoryOnce(t *testing.T) {
 	second := a.collectPayload(context.Background())
 	if second.Inventory != nil {
 		t.Errorf("segundo payload sin escaneo nuevo: Inventory = %+v, se esperaba nil", second.Inventory)
+	}
+}
+
+// fakeFailingCollector simula un collector cuya fuente de datos falla
+// siempre: sirve para comprobar que ningún collector individual le cuesta el
+// heartbeat entero a los demás (P04).
+type fakeFailingCollector struct{ name string }
+
+func (f fakeFailingCollector) Name() string { return f.name }
+func (f fakeFailingCollector) Collect(context.Context, *payload.Metrics) error {
+	return errors.New("fallo simulado")
+}
+
+// El collector de potencia (o cualquier otro) puede fallar sin ninguna
+// fuente de hardware que leer; eso no debe costarle el heartbeat a CPU y
+// memoria, que sí tienen dato. Ver P04 del proyecto de consumo energético.
+func TestCollectPayloadSurvivesAFailingCollector(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	a.collectors = []collector.Collector{
+		collector.NewCPU(),
+		collector.NewMemory(),
+		fakeFailingCollector{name: "power"},
+	}
+
+	p := a.collectPayload(context.Background())
+
+	if p.Metrics.CPU == nil {
+		t.Error("Metrics.CPU = nil: el fallo de otro collector no debería impedir recolectar CPU")
+	}
+	if p.Metrics.Memory == nil {
+		t.Error("Metrics.Memory = nil: el fallo de otro collector no debería impedir recolectar memory")
+	}
+	if p.Metrics.Power != nil {
+		t.Errorf("Metrics.Power = %+v, se esperaba nil tras el fallo del collector de potencia", p.Metrics.Power)
+	}
+}
+
+func hasCollector(cs []collector.Collector, name string) bool {
+	for _, c := range cs {
+		if c.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func collectorNames(cs []collector.Collector) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Name()
+	}
+	return out
+}
+
+// Sin "collectors" en config.toml, el agente construye TODOS los
+// registrados, incluido "power": una métrica nueva no debe quedar excluida
+// de una instalación por defecto (P05).
+func TestNewCollectorsIncludePowerByDefault(t *testing.T) {
+	a, _ := newTestAgent(t, "")
+	if !hasCollector(a.collectors, "power") {
+		t.Errorf("collectors = %v, se esperaba \"power\" incluido por defecto", collectorNames(a.collectors))
+	}
+}
+
+// Una lista explícita en config.toml sigue pudiendo excluir "power" (o
+// cualquier otro collector) sin afectar al resto (P05).
+func TestNewCollectorsExcludePowerWhenNotListed(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	body := "serverUrl = \"https://ellysia.example/hygeia\"\ncollectors = [\"cpu\", \"memory\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HYGEIA_DATA_DIR", dir)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	a := New(slog.New(slog.NewTextHandler(io.Discard, nil)), cfg)
+
+	if hasCollector(a.collectors, "power") {
+		t.Errorf("collectors = %v, \"power\" no debería construirse: no está en la lista explícita", collectorNames(a.collectors))
+	}
+	if !hasCollector(a.collectors, "cpu") || !hasCollector(a.collectors, "memory") {
+		t.Errorf("collectors = %v, se esperaban cpu y memory", collectorNames(a.collectors))
 	}
 }
 

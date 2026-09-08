@@ -2,6 +2,8 @@ package collector
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/ProjectEllysia/Ellysia-Hygeia/internal/payload"
@@ -12,15 +14,44 @@ type fakeCollector struct{ name string }
 func (f *fakeCollector) Name() string                                    { return f.name }
 func (f *fakeCollector) Collect(context.Context, *payload.Metrics) error { return nil }
 
+// discardLogger evita ensuciar la salida de los tests con los avisos que
+// pueda emitir el collector "power" al no encontrar fuente.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func TestRegistryBuildDefaultsToAllWhenNamesEmpty(t *testing.T) {
-	r := NewRegistry()
-	if got := len(r.Build(nil)); got != 5 {
-		t.Errorf("Build(nil) devolvió %d colectores, se esperaban 5 (todos los registrados por defecto)", got)
+	r := NewRegistry(discardLogger())
+	// Comparamos contra r.order y no contra una lista literal: si este test
+	// tuviera su propia copia de los nombres, sería la TERCERA copia de la
+	// lista, exactamente el fallo que este cambio elimina.
+	got := namesOf(r.Build(nil))
+	want := append([]string(nil), r.order...)
+	if len(got) != len(want) {
+		t.Fatalf("Build(nil) = %v, se esperaba un colector por cada nombre registrado (%v)", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Build(nil)[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRegistryBuildDefaultIncludesPower(t *testing.T) {
+	r := NewRegistry(discardLogger())
+	found := false
+	for _, c := range r.Build(nil) {
+		if c.Name() == "power" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Build(nil) no incluyó el collector \"power\": debe estar activo por defecto")
 	}
 }
 
 func TestRegistryBuildFiltersUnknownNames(t *testing.T) {
-	r := NewRegistry()
+	r := NewRegistry(discardLogger())
 	cs := r.Build([]string{"cpu", "un-typo-que-no-existe", "memory"})
 	if got := len(cs); got != 2 {
 		t.Fatalf("Build con un nombre desconocido devolvió %d, se esperaban 2 (cpu, memory)", got)

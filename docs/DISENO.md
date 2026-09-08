@@ -70,7 +70,7 @@ cmd/hygeia-tray/        main del companion de bandeja (§8)
 
 internal/agent/         bucle principal + estado observable por el tray
 internal/config/        carga de config (fichero + env), enrollment, permisos
-internal/collector/     un colector por familia: cpu, mem, disk, net, proc
+internal/collector/     un colector por familia: cpu, mem, disk, net, proc, power
 internal/buffer/        ring buffer en disco: resiliencia si el backend cae
 internal/shipper/       POST /ingest, gzip, reintento con backoff
 internal/payload/       los tipos del contrato de ingesta

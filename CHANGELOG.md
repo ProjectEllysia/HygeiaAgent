@@ -4,12 +4,41 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/).
 Las versiones publicadas se anotan en [`VERSION.txt`](VERSION.txt).
 
 Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
-[`docs/ANALISIS-INGENIERIA.md`](docs/ANALISIS-INGENIERIA.md).
+[`docs/ANALISIS-INGENIERIA.md`](docs/ANALISIS-INGENIERIA.md). Los `P-nn`
+remiten al proyecto [Hygeia — Consumo
+energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ## [Sin publicar]
 
 ### Añadido
 
+- **Contrato de potencia** (`P01`): `payload.PowerMetrics` (`watts`,
+  `estimated`, `source`) y el campo `metrics.power`, ausente cuando el agente
+  no tiene ninguna fuente de consumo eléctrico que reportar. Primer bloque
+  del proyecto de consumo energético; todavía no lo rellena ningún collector.
+- **Interfaz `PowerProvider` y collector `power`** (`P02`): aísla de dónde
+  sale el vatio (RAPL, hwmon, NVML, un modelo de estimación...) detrás de un
+  único método, `Read`, que distingue "sin fuente" (`nil` sin error) de "hay
+  fuente y falló" (error). Todavía no hay ninguna implementación real por
+  sistema operativo — llegan en la fase siguiente —, así que por ahora
+  siempre reporta "sin fuente".
+- **El collector de potencia nunca rompe el heartbeat** (`P04`): sin fuente
+  de consumo eléctrico, o con una fuente que falla, `power` devuelve el
+  payload intacto (conserva `cpu`, `memory`, etc.) en vez de propagar el
+  fallo. El aviso correspondiente se registra una única vez, no en cada
+  ciclo. `PowerCollector` recibe ahora el logger del agente a través de
+  `collector.NewRegistry(log)`.
+- **El collector de potencia se puede apagar desde `config.toml`** (`P05`):
+  igual que cualquier otro, listando explícitamente los collectors que se
+  quieren activos. Por defecto, sin la clave `collectors`, el agente activa
+  todos los que conoce — incluido `power`.
+- **`virtualizationSystem` y `virtualizationRole` en `host`** (`P29`, parte
+  de agente): permiten al backend distinguir, más adelante, "esta máquina no
+  tiene sensores de potencia" de "esta máquina es un invitado, y su consumo
+  lo mide el equipo físico que la hospeda". Salen de `gopsutil.host.Info()`,
+  la misma llamada que ya rellenaba `kernel` y `uptimeSec`. La parte de
+  servidor (esquema, migración, mensaje en la interfaz) queda fuera de este
+  repositorio.
 - **`hygeia-agent doctor`** (`F-04`): once comprobaciones —configuración,
   permisos, clave, proxy y CA, DNS, TCP, certificado TLS, autenticación,
   desviación de reloj y estado del servicio— con un consejo por cada fallo y
@@ -44,6 +73,12 @@ Los identificadores `A-nn`, `O-nn` y `F-nn` remiten a
 
 ### Corregido
 
+- **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
+  la derivaba de un literal aparte del que registraba `NewRegistry`, y las
+  dos podían divergir sin que nada lo impidiera — de hecho ya habían
+  divergido de un tercer literal en `config.Load` (ver `P05`). Ahora
+  `Registry` guarda el orden de alta y `Build(nil)` lo deriva de ahí. El
+  collector `power` queda registrado y activo por defecto.
 - **Una clave revocada dejaba el agente girando en vacío** (`F-03`). Tras rotar
   la clave en Ellysia, el agente reintentaba cuatro veces por ciclo contra un
   401 y llenaba el buffer con heartbeats que ya nadie iba a aceptar, mientras

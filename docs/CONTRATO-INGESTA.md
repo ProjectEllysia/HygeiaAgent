@@ -1,4 +1,4 @@
-# Contrato de ingesta de Hygeia — v1.1
+# Contrato de ingesta de Hygeia — v1.2
 
 > **Este documento es la fuente única del contrato entre el agente Hygeia y el
 > backend de Ellysia.** Antes existía por duplicado, en el §9 del README de este
@@ -120,6 +120,8 @@ cualquier petición que no la traiga, en vez de intentar adivinar cuánto leer.
 | `os` | cadena, ≤64 | No | `linux`, `windows`, `darwin`. |
 | `kernel` | cadena, ≤128 | No | Si falta, el backend conserva el último conocido: es identidad del host. |
 | `uptimeSec` | entero ≥0 | No | Estado instantáneo: el backend lo sobreescribe siempre, incluido a nulo. |
+| `virtualizationSystem` | cadena | No | `kvm`, `vmware`, `hyperv`, `xen`, `docker`... Ausente si `gopsutil` no detecta ninguno. Ver P29 del proyecto de consumo energético. |
+| `virtualizationRole` | cadena | No | `guest` o `host`. Permite distinguir "sin sensores de potencia" de "esto es una máquina virtual, que no los tiene por diseño". El backend todavía no lo interpreta (P29 sin implementar en `EllysiaServer`); el agente ya lo envía. |
 
 ### `metrics.cpu` (obligatorio)
 
@@ -189,6 +191,30 @@ Cada entrada de `topCpu`/`topMem`:
 
 Ninguna de las dos listas puede ser `null`: una lista vacía se envía como `[]`.
 El esquema del backend rechaza `null` en un campo de lista.
+
+### `metrics.power`
+
+> Añadido en la v1.2 (proyecto [Hygeia — Consumo
+> energético](https://github.com/orgs/ProjectEllysia/projects/7), fase 0).
+> El backend todavía no valida ni persiste este bloque — la regla general de
+> §7 aplica: lo desconocido se descarta sin romper nada —, así que el agente
+> puede empezar a enviarlo antes de que el otro lado lo entienda.
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `watts` | decimal | Sí (si el bloque existe) | Potencia instantánea o su mejor aproximación. `0` es un valor válido y distinto de que el bloque esté ausente. |
+| `estimated` | booleano | Sí | Distingue una lectura de sensor (`false`) de una construcción nuestra, por ejemplo un modelo de utilización en Windows (`true`). |
+| `source` | cadena | Sí | Cadena libre: `rapl`, `hwmon:<driver>`, `nvidia`, `amd_gpu`, `model`, `model+nvidia`, o combinaciones como `rapl+nvidia`. No es un catálogo cerrado a propósito: una fuente nueva no debería exigir versionar el contrato. |
+
+El bloque entero está **ausente** cuando esta máquina no tiene ninguna fuente
+de potencia que reportar — eso sigue siendo el caso normal para buena parte
+del parque (una máquina virtual, un contenedor, un equipo sin sensores
+compatibles). La Fase 1 de este proyecto rellenó los proveedores reales: RAPL
+y `hwmon` en Linux, GPU NVIDIA (`nvidia-smi`) y AMD (`hwmon` del dispositivo)
+en ambos sistemas, y un modelo de estimación por utilización en Windows —
+detalle completo, por plataforma y con ejemplos de payload, en el
+[README del agente](../README.md#consumo-eléctrico). Un heartbeat sin `power`
+conserva `cpu`, `memory` y el resto de métricas con normalidad.
 
 ### `inventory.software` — lista, máximo 2000
 
@@ -317,5 +343,6 @@ una ventana simétrica corta, ese buffer era decorativo. Ver A-02 del análisis.
 
 | Versión | Cambio |
 |---|---|
+| **1.2** | `metrics.power` (`watts`, `estimated`, `source`), ausente sin fuente de potencia. `host.virtualizationSystem` y `host.virtualizationRole`, para que el backend distinga "sin sensores" de "es una máquina virtual" (P29). Fases 0 y 1 del proyecto de consumo energético: el contrato y, ahora, los proveedores reales de Linux (RAPL, hwmon, GPU) y Windows (modelo por utilización). |
 | **1.1** | `cpuPct` de proceso pasa a ser porcentaje de la capacidad total del equipo, normalizado por número de núcleos (A-01). Ventana de reloj asimétrica, con `maxBackfillSec` nuevo (A-02). El `429` expone `min_interval_sec` (A-03). Documentado `inventory`, que existía sin estar en el contrato escrito. |
 | **1.0** | Contrato inicial: métricas de CPU, memoria, disco, red y procesos, más `nextIntervalSec` en la respuesta. |

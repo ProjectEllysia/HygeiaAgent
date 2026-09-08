@@ -88,6 +88,20 @@ func TestDoctorNeverPrintsTheSecret(t *testing.T) {
 	}
 }
 
+// TestCheckPowerNeverFails es el criterio de "no romper el arranque": la
+// inmensa mayoría de las máquinas donde corre este agente no tienen ninguna
+// fuente de potencia, y eso es información, no un fallo de doctor.
+func TestCheckPowerNeverFails(t *testing.T) {
+	c := checkPower()
+	if c.level == levelFail {
+		t.Errorf("checkPower() level = fail (%s), se esperaba ok o aviso: "+
+			"la ausencia de potencia nunca debe fallar doctor", c.detail)
+	}
+	if c.level == levelWarn && c.hint == "" {
+		t.Error("sin fuente de potencia, hint no debería quedar vacío: siempre hay algo que decir (aunque sea \"es normal\")")
+	}
+}
+
 func TestRedactProxyCredentials(t *testing.T) {
 	casos := map[string]string{
 		"http://usuario:clave@proxy.empresa.local:3128": "oculto@proxy.empresa.local:3128",

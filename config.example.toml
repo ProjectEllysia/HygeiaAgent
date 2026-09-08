@@ -26,7 +26,13 @@ serverUrl   = "https://ellysia.tu-dominio/hygeia"
 # agentKey  = "PEGA-AQUI-LA-CLAVE-EMITIDA-POR-EL-BACKEND"
 
 intervalSec = 15
-collectors  = ["cpu", "memory", "disk", "network", "processes"]
+
+# Si se omite esta clave (o se deja como lista vacía), el agente activa TODOS
+# los collectors que conoce. La lista explícita de abajo es solo un ejemplo
+# de cómo excluir alguno, por ejemplo "power" en una flota de máquinas
+# virtuales donde el consumo eléctrico no tiene fuente que leer y añadirlo
+# aquí evita el intento en vano.
+# collectors = ["cpu", "memory", "disk", "network", "processes", "power"]
 
 # Cadencia del escaneo de software instalado, independiente de intervalSec:
 # el inventario cambia poco y escanearlo es más lento que el resto de

@@ -74,6 +74,37 @@ func TestPayloadJSON_HostInfo(t *testing.T) {
 	}
 }
 
+func TestHostInfoJSON_OmitsVirtualizationFieldsWhenEmpty(t *testing.T) {
+	h := HostInfo{Hostname: "bare-metal-01", OS: "linux"}
+	data, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if strings.Contains(string(data), "virtualization") {
+		t.Errorf("esperaba los campos de virtualización ausentes en una máquina física, got %s", data)
+	}
+}
+
+func TestHostInfoJSON_VirtualizationFieldsRoundTrip(t *testing.T) {
+	h := HostInfo{
+		Hostname:             "vm-01",
+		VirtualizationSystem: "kvm",
+		VirtualizationRole:   "guest",
+	}
+	data, err := json.Marshal(h)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+
+	var got HostInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	if got.VirtualizationSystem != "kvm" || got.VirtualizationRole != "guest" {
+		t.Errorf("HostInfo = %+v", got)
+	}
+}
+
 func TestMetricsJSON_CPUMetrics(t *testing.T) {
 	m := Metrics{
 		CPU: &CPUMetrics{
@@ -132,6 +163,39 @@ func TestProcessInfoJSON(t *testing.T) {
 	}
 	if got.PID != 1234 {
 		t.Errorf("PID = %d", got.PID)
+	}
+}
+
+func TestMetricsJSON_NilPowerOmitsKey(t *testing.T) {
+	m := Metrics{CPU: &CPUMetrics{UsagePct: 10}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if strings.Contains(string(data), `"power"`) {
+		t.Errorf("esperaba que power estuviera ausente sin fuente de potencia, got %s", data)
+	}
+}
+
+func TestMetricsJSON_ZeroWattsPowerIsPresent(t *testing.T) {
+	m := Metrics{Power: &PowerMetrics{Watts: 0, Estimated: false, Source: "rapl"}}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("json.Marshal = %v", err)
+	}
+	if !strings.Contains(string(data), `"power":{"watts":0,"estimated":false,"source":"rapl"}`) {
+		t.Errorf("esperaba power con watts:0 presente (distinto de ausente), got %s", data)
+	}
+
+	var got Metrics
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	if got.Power == nil {
+		t.Fatal("Power = nil tras round-trip, se esperaba un valor con watts:0")
+	}
+	if got.Power.Watts != 0 || got.Power.Source != "rapl" {
+		t.Errorf("Power = %+v", got.Power)
 	}
 }
 
