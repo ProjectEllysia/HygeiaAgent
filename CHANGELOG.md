@@ -73,6 +73,14 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ### Corregido
 
+- **El aviso de "sin fuente de potencia" ya no se emite en el primer ciclo.**
+  Una fuente basada en un contador de energía acumulada —RAPL es la
+  principal— necesita dos lecturas y el tiempo entre ellas para dar vatios,
+  así que su primer ciclo devuelve "todavía no hay dato", que es exactamente
+  lo que devuelve una máquina sin sensores. El collector los confundía y
+  gastaba su aviso único justo ahí, dejando escrito para siempre "esta
+  máquina no expone ninguna fuente de consumo eléctrico compatible" en
+  equipos que reportaban potencia con normalidad desde el segundo heartbeat.
 - **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
   la derivaba de un literal aparte del que registraba `NewRegistry`, y las
   dos podían divergir sin que nada lo impidiera — de hecho ya habían
