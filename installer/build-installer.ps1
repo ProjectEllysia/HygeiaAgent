@@ -46,9 +46,9 @@ try {
     Pop-Location
 }
 
-# Embebe la config del proyecto (serverUrl, intervalSec, collectors) para
-# que el cliente solo tenga que pegar su agentKey en el tray, no editar un
-# TOML a mano. Se despoja de dos campos antes de empaquetar:
+# Embebe la config del proyecto (serverUrl, intervalSec) para que el cliente
+# solo tenga que pegar su agentKey en el tray, no editar un TOML a mano. Se
+# despoja de tres campos antes de empaquetar:
 #   - agentKey: es la clave de PRUEBA del desarrollador — distribuirla
 #     filtraría esa clave a todos los clientes y los haría colisionar sobre
 #     el mismo activo. Cada cliente necesita la suya, vía enrollment (§11.3).
@@ -56,15 +56,28 @@ try {
 #     `go run` desde el repo), se resolvería contra el directorio de trabajo
 #     del SERVICIO instalado (no el de ProgramData) y rompería el buffer.
 #     Omitiéndola, config.Load aplica su default correcto (config.go:75).
+#   - collectors: la lista del desarrollador es la de SU máquina, y viajaba
+#     tal cual a todos los clientes. Una lista con cinco nombres escrita
+#     antes de que existiera el collector de potencia dejó a los equipos
+#     instalados sin reportar consumo eléctrico, sin ningún aviso: el log
+#     solo decía "collectors=5" y `doctor` no lo mira, porque interroga al
+#     sensor y no a la configuración. Omitiéndola, Registry.Build activa
+#     todos los collectors registrados, que es lo que debe recibir una
+#     instalación nueva; excluir alguno es una decisión de quien despliega,
+#     no algo que se hereda del equipo donde se generó el instalador.
 $projectConfigPath = Join-Path $repoRoot "config.toml"
 if (-not (Test-Path $projectConfigPath)) {
     throw "No se encontró config.toml en la raíz del repo. Créalo (cp config.example.toml config.toml) y rellena al menos serverUrl antes de generar el instalador."
 }
 
-Write-Host "==> Embebiendo config.toml del proyecto (sin agentKey ni bufferPath)"
+Write-Host "==> Embebiendo config.toml del proyecto (sin agentKey, bufferPath ni collectors)"
 $rawConfig = [System.IO.File]::ReadAllText($projectConfigPath, [System.Text.Encoding]::UTF8)
 $configLines = $rawConfig -split "`r`n|`n" |
-    Where-Object { $_ -notmatch '^\s*agentKey\s*=' -and $_ -notmatch '^\s*bufferPath\s*=' }
+    Where-Object {
+        $_ -notmatch '^\s*agentKey\s*=' -and
+        $_ -notmatch '^\s*bufferPath\s*=' -and
+        $_ -notmatch '^\s*collectors\s*='
+    }
 $sanitizedConfig = ($configLines -join "`r`n")
 
 $distConfigPath = Join-Path $distDir "config.toml"

@@ -73,6 +73,34 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ### Corregido
 
+- **El instalador ya no empotra la lista de collectors del desarrollador.**
+  Empaquetaba el `config.toml` de la raíz del repositorio tal cual, y ese
+  fichero traía una lista escrita antes de que existiera el collector de
+  potencia: todo equipo instalado con el paquete recogía cinco métricas y
+  nunca el consumo eléctrico, aunque su hardware lo expusiera. No había
+  aviso de ningún tipo — `doctor` interroga al sensor, no a la
+  configuración—, y la única huella era un `collectors=5` en el log de
+  arranque. Ahora la lista se filtra igual que ya se filtraban `agentKey` y
+  `bufferPath`, así que una instalación nueva activa todos los collectors
+  registrados. Los paquetes `.deb`/`.rpm` nunca lo sufrieron: instalan
+  `config.example.toml`, donde la clave está comentada.
+- **Un reinicio ya no deja el canal de control sin socket.** Cerrar un
+  listener Unix borra su fichero, y en un reinicio ese borrado llegaba tarde:
+  el proceso saliente cerraba el suyo cuando el entrante ya había hecho bind
+  sobre la misma ruta, así que se llevaba por delante un socket ajeno. El
+  agente quedaba escuchando sobre un socket sin nombre en el sistema de
+  ficheros —sano y enviando heartbeats, pero incapaz de responder a
+  `hygeia-agent doctor` o a la bandeja, que informaban de un servicio caído.
+  La limpieza de la ruta la sigue haciendo `Listen` antes del bind, que es el
+  lado que sabe que el socket anterior está huérfano.
+- **El aviso de "sin fuente de potencia" ya no se emite en el primer ciclo.**
+  Una fuente basada en un contador de energía acumulada —RAPL es la
+  principal— necesita dos lecturas y el tiempo entre ellas para dar vatios,
+  así que su primer ciclo devuelve "todavía no hay dato", que es exactamente
+  lo que devuelve una máquina sin sensores. El collector los confundía y
+  gastaba su aviso único justo ahí, dejando escrito para siempre "esta
+  máquina no expone ninguna fuente de consumo eléctrico compatible" en
+  equipos que reportaban potencia con normalidad desde el segundo heartbeat.
 - **`Registry.Build` ya no repite la lista de collectors por defecto** (`P03`):
   la derivaba de un literal aparte del que registraba `NewRegistry`, y las
   dos podían divergir sin que nada lo impidiera — de hecho ya habían

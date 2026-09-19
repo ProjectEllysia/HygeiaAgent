@@ -37,6 +37,14 @@ type PowerCollector struct {
 	log      *slog.Logger
 
 	warnOnce sync.Once
+	// firstCycleDone separa "todavía no hay dato" de "aquí no hay fuente".
+	// Una fuente basada en un contador de energía acumulada (RAPL es la
+	// principal) no puede dar vatios en su primer ciclo: necesita dos
+	// lecturas y el tiempo entre ellas, así que devuelve nil sin error, que
+	// es exactamente lo que devuelve una máquina sin sensores. Avisar ahí
+	// gastaría warnOnce en el único ciclo en que la afirmación siempre es
+	// falsa, y ya no habría forma de retractarse.
+	firstCycleDone bool
 }
 
 // NewPower construye el collector con el proveedor de esta plataforma. log
@@ -51,6 +59,9 @@ func NewPower(log *slog.Logger) Collector {
 func (c *PowerCollector) Name() string { return "power" }
 
 func (c *PowerCollector) Collect(ctx context.Context, m *payload.Metrics) error {
+	firstCycle := !c.firstCycleDone
+	c.firstCycleDone = true
+
 	pw, err := c.provider.Read(ctx)
 	switch {
 	case err != nil:
@@ -59,9 +70,14 @@ func (c *PowerCollector) Collect(ctx context.Context, m *payload.Metrics) error 
 		})
 		return nil
 	case pw == nil:
-		c.warnOnce.Do(func() {
-			c.log.Info("esta máquina no expone ninguna fuente de consumo eléctrico compatible")
-		})
+		// En una máquina sin ninguna fuente el aviso solo se retrasa un
+		// ciclo (15 s con la cadencia por defecto); en una con RAPL deja de
+		// aparecer, que es lo que se quiere.
+		if !firstCycle {
+			c.warnOnce.Do(func() {
+				c.log.Info("esta máquina no expone ninguna fuente de consumo eléctrico compatible")
+			})
+		}
 		return nil
 	default:
 		m.Power = pw

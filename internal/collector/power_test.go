@@ -109,3 +109,61 @@ func TestPowerCollectorName(t *testing.T) {
 		t.Errorf("Name() = %q, want %q", got, "power")
 	}
 }
+
+// sequencePowerProvider devuelve una lectura distinta en cada llamada, para
+// reproducir el arranque de una fuente basada en un contador de energía
+// acumulada: el primer ciclo no tiene con qué calcular vatios y el segundo
+// sí.
+type sequencePowerProvider struct {
+	readings []*payload.PowerMetrics
+	calls    int
+}
+
+func (p *sequencePowerProvider) Read(ctx context.Context) (*payload.PowerMetrics, error) {
+	if p.calls >= len(p.readings) {
+		return nil, nil
+	}
+	m := p.readings[p.calls]
+	p.calls++
+	return m, nil
+}
+
+// El primer ciclo sin dato no autoriza a afirmar nada sobre el hardware: es
+// lo que devuelve RAPL siempre, tenga o no sensores la máquina.
+func TestPowerCollectorDoesNotWarnOnTheFirstCycle(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	c := &PowerCollector{provider: fakePowerProvider{}, log: log}
+
+	if err := c.Collect(context.Background(), &payload.Metrics{}); err != nil {
+		t.Fatalf("Collect() = %v", err)
+	}
+
+	if strings.Contains(buf.String(), "no expone ninguna fuente") {
+		t.Errorf("el aviso se emitió en el primer ciclo, donde todavía no se sabe nada: %s", buf.String())
+	}
+}
+
+// El caso que destapó el fallo en campo: una máquina con RAPL legible daba
+// nil en el primer ciclo, y el aviso quedaba escrito para siempre aunque
+// todos los ciclos siguientes reportasen vatios.
+func TestPowerCollectorNeverWarnsWhenTheSecondCycleYieldsWatts(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	provider := &sequencePowerProvider{readings: []*payload.PowerMetrics{
+		nil,
+		{Watts: 31.5, Estimated: true, Source: "rapl"},
+		{Watts: 33.0, Estimated: true, Source: "rapl"},
+	}}
+	c := &PowerCollector{provider: provider, log: log}
+
+	for range 3 {
+		if err := c.Collect(context.Background(), &payload.Metrics{}); err != nil {
+			t.Fatalf("Collect() = %v", err)
+		}
+	}
+
+	if strings.Contains(buf.String(), "no expone ninguna fuente") {
+		t.Errorf("se avisó de que no hay fuente en una máquina que sí la tiene: %s", buf.String())
+	}
+}

@@ -3,6 +3,7 @@
 package control
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -55,4 +56,47 @@ func TestListenRejectsAnOverlongSocketPath(t *testing.T) {
 			t.Errorf("el error no explica el problema (%q no aparece): %v", want, err)
 		}
 	}
+}
+
+// Cerrar el listener NO debe borrar el fichero del socket. Go lo hace por
+// defecto, y en un reinicio del servicio eso es una carrera perdida: el
+// proceso saliente cierra su listener después de que el entrante haya hecho
+// bind sobre la misma ruta, y se lleva por delante un socket que ya es de
+// otro. El resultado en campo fue un agente sano al que `doctor` daba por
+// caído, porque el canal de control había dejado de existir en disco.
+func TestClosingTheListenerKeepsTheSocketFile(t *testing.T) {
+	isolate(t)
+
+	ln, err := Listen()
+	if err != nil {
+		t.Fatalf("Listen() = %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+
+	if _, err := os.Stat(socketPath()); err != nil {
+		t.Errorf("el fichero del socket desapareció al cerrar el listener: %v", err)
+	}
+}
+
+// La contrapartida del test anterior: si el cierre ya no limpia, el arranque
+// siguiente tiene que poder reutilizar la ruta. Eso lo cubre el borrado del
+// socket huérfano que Listen hace antes del bind.
+func TestListenReusesThePathLeftByAPreviousProcess(t *testing.T) {
+	isolate(t)
+
+	first, err := Listen()
+	if err != nil {
+		t.Fatalf("primer Listen() = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+
+	second, err := Listen()
+	if err != nil {
+		t.Fatalf("segundo Listen() sobre la ruta que dejó el anterior = %v", err)
+	}
+	_ = second.Close()
 }
