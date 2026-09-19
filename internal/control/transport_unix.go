@@ -64,6 +64,17 @@ func Listen() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("control: abriendo socket %q: %w", path, err)
 	}
+	// Go desvincula la ruta al cerrar el listener, y en un reinicio eso borra
+	// el socket del proceso ENTRANTE: el saliente cierra el suyo dentro del
+	// plazo de gracia de http.Shutdown, para entonces el nuevo ya ha hecho
+	// bind sobre la misma ruta, y el unlink se lleva un fichero que ya no es
+	// suyo. El proceso nuevo queda escuchando sin nombre en el sistema de
+	// ficheros y nadie puede volver a conectar. La limpieza no se pierde: la
+	// hace unas líneas más arriba el proceso que va a USAR la ruta, que es
+	// el único que puede saber que el socket anterior está huérfano.
+	if unixLn, ok := ln.(*net.UnixListener); ok {
+		unixLn.SetUnlinkOnClose(false)
+	}
 	if err := os.Chmod(path, 0o660); err != nil {
 		_ = ln.Close()
 		return nil, fmt.Errorf("control: fijando permisos del socket: %w", err)

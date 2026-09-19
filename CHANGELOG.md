@@ -73,6 +73,15 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ### Corregido
 
+- **Un reinicio ya no deja el canal de control sin socket.** Cerrar un
+  listener Unix borra su fichero, y en un reinicio ese borrado llegaba tarde:
+  el proceso saliente cerraba el suyo cuando el entrante ya había hecho bind
+  sobre la misma ruta, así que se llevaba por delante un socket ajeno. El
+  agente quedaba escuchando sobre un socket sin nombre en el sistema de
+  ficheros —sano y enviando heartbeats, pero incapaz de responder a
+  `hygeia-agent doctor` o a la bandeja, que informaban de un servicio caído.
+  La limpieza de la ruta la sigue haciendo `Listen` antes del bind, que es el
+  lado que sabe que el socket anterior está huérfano.
 - **El aviso de "sin fuente de potencia" ya no se emite en el primer ciclo.**
   Una fuente basada en un contador de energía acumulada —RAPL es la
   principal— necesita dos lecturas y el tiempo entre ellas para dar vatios,
