@@ -73,6 +73,17 @@ energético](https://github.com/orgs/ProjectEllysia/projects/7).
 
 ### Corregido
 
+- **El instalador ya no empotra la lista de collectors del desarrollador.**
+  Empaquetaba el `config.toml` de la raíz del repositorio tal cual, y ese
+  fichero traía una lista escrita antes de que existiera el collector de
+  potencia: todo equipo instalado con el paquete recogía cinco métricas y
+  nunca el consumo eléctrico, aunque su hardware lo expusiera. No había
+  aviso de ningún tipo — `doctor` interroga al sensor, no a la
+  configuración—, y la única huella era un `collectors=5` en el log de
+  arranque. Ahora la lista se filtra igual que ya se filtraban `agentKey` y
+  `bufferPath`, así que una instalación nueva activa todos los collectors
+  registrados. Los paquetes `.deb`/`.rpm` nunca lo sufrieron: instalan
+  `config.example.toml`, donde la clave está comentada.
 - **Un reinicio ya no deja el canal de control sin socket.** Cerrar un
   listener Unix borra su fichero, y en un reinicio ese borrado llegaba tarde:
   el proceso saliente cerraba el suyo cuando el entrante ya había hecho bind
